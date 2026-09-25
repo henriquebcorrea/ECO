@@ -384,3 +384,231 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Layout and type scale for the play screen. */
+body { overflow: hidden; }
+.page-shell {
+  display: flex;
+  width: min(calc(100% - 56px), 1440px);
+  height: 100dvh;
+  min-height: 540px;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px 0 10px;
+}
+.topbar { flex: 0 0 auto; }
+.topbar-meta { gap: 12px; }
+.challenge-select {
+  min-width: 180px;
+  min-height: 40px;
+  padding: 0 34px 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 14px;
+}
+.challenge-select:focus-visible { outline: 3px solid var(--orange); outline-offset: 3px; }
+.game-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(340px, .88fr) minmax(0, 1.12fr);
+  gap: 24px;
+  padding-top: 8px;
+}
+.game-panel { display: flex; min-height: 0; flex-direction: column; overflow-y: auto; scrollbar-width: thin; }
+.intro-row { align-items: center; gap: 14px; padding: 12px 0 15px; }
+.intro-row h1 { margin-top: 6px; font-size: clamp(27px, 3vw, 38px); line-height: 1.05; }
+.eyebrow, .target-label, .attempts-heading > span, .clue-kicker,
+.section-label, .map-count, .input-label, .input-foot, .page-footer,
+.map-legend, .target-sense { font-size: 12px; letter-spacing: .035em; }
+.how-to { width: 158px; flex: 0 0 auto; margin: 0; }
+.how-to summary { font-size: 14px; }
+.how-to-copy { font-size: 14px; }
+.target-strip { min-height: 98px; gap: 14px; padding: 14px 17px; }
+.target-label, .attempts-heading > span { font-size: 12px; }
+.target-copy strong { font-size: 32px; }
+.target-sense { font-size: 12px; }
+.attempts-box { min-width: 150px; padding-left: 17px; }
+.attempts-heading { margin-bottom: 5px; }
+.attempts-heading strong { font-size: 19px; }
+.attempt-dots { min-height: 18px; justify-content: flex-start; }
+.attempt-empty, .attempt-used { color: var(--muted); font-size: 12px; }
+.attempt-used { color: var(--green-dark); font-weight: 600; }
+.attempts-box small { margin-top: 3px; font-size: 12px; }
+.notice { margin-top: 9px; padding: 9px 12px; font-size: 14px; }
+.clue-panel { min-height: 72px; margin-top: 10px; padding: 10px 12px; }
+.clue-heading { min-width: 98px; }
+.clue-heading strong { font-size: 15px; }
+.clue-kicker { font-size: 12px; }
+.clue-values { justify-content: flex-start; gap: 6px; }
+.clue-value { min-height: 34px; padding: 5px 10px; font-size: 13px; white-space: normal; }
+.clue-value i { font-size: 13px; }
+.clue-relation { max-width: 100%; }
+.clue-empty p { font-size: 14px; }
+.guess-form { margin-top: 10px; padding: 12px 14px 10px; }
+.input-label { margin-bottom: 7px; font-size: 13px; }
+.input-wrap { height: 50px; }
+.input-wrap input { font-size: 16px; }
+.submit-button { min-height: 50px; font-size: 12px; }
+.input-foot { margin-top: 7px; font-size: 12px; }
+.map-section { display: flex; min-height: 0; flex-direction: column; margin-top: 0; }
+.map-heading { flex: 0 0 auto; margin-bottom: 8px; }
+.section-label { font-size: 12px; }
+.section-label span:first-child { width: 25px; height: 25px; font-size: 12px; }
+.map-heading h2 { margin-top: 5px; font-size: 22px; }
+.map-count { font-size: 12px; }
+.map-card { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+.graph-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; }
+.graph-svg { width: 100%; min-width: 640px; max-height: none; padding: 8px 12px 12px; }
+.edge-label { font-size: 12px; }
+.target-eyebrow { font-size: 10px; }
+.guess-word { font-size: 15px; }
+.guess-meta { font-size: 11px; }
+.map-legend { min-height: 36px; gap: 18px; flex: 0 0 auto; font-size: 12px; }
+.map-legend > span { gap: 7px; }
+.data-credit { flex: 0 0 auto; margin: 6px 0 0; color: var(--muted); font-size: 11px; text-align: right; }
+.data-credit a { color: var(--green-dark); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.page-footer { flex: 0 0 auto; gap: 12px; margin-top: 8px; padding-top: 7px; font-size: 11px; }
+.finish-panel { margin-top: 10px; padding: 12px; }
+.finish-panel h2 { font-size: 23px; }
+.finish-panel p, .connection-panel > p, .result-share p { font-size: 14px; }
+.connection-panel { margin-top: 10px; padding: 13px; }
+.connection-panel h2 { margin: 8px 0 4px; font-size: 22px; }
+.connection-options { gap: 7px; margin-top: 10px; }
+.connection-option { min-height: 44px; font-size: 14px; }
+.route-node { font-size: 13px; }
+.result-share { margin-top: 9px; padding-top: 7px; }
+.result-share p { margin-top: 3px; }
+.share-button { min-height: 42px; font-size: 13px; }
+.page-footer { color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+
+@media (max-width: 900px) {
+  .game-layout { grid-template-columns: minmax(310px, .95fr) minmax(0, 1.05fr); gap: 14px; }
+  .intro-row { align-items: start; flex-direction: column; }
+  .intro-row h1 { font-size: clamp(27px, 4vw, 35px); }
+  .how-to { width: 100%; }
+  .target-strip { grid-template-columns: 1fr auto; }
+  .attempts-box { min-width: 125px; padding-left: 12px; }
+  .clue-panel { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .clue-heading { flex-direction: row; align-items: center; gap: 7px; }
+}
+
+@media (max-width: 700px) {
+  body { overflow: hidden; }
+  .page-shell { width: 100%; min-height: 0; height: 100dvh; padding: 8px 12px 7px; }
+  .topbar { min-height: 38px; }
+  .topbar-meta { gap: 8px; }
+  .challenge-select { min-width: 0; max-width: min(52vw, 220px); min-height: 38px; padding-left: 9px; font-size: 13px; }
+  .game-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(120px, 1fr); gap: 8px; padding-top: 2px; }
+  .game-panel { overflow: visible; }
+  .intro-row { align-items: center; flex-direction: row; gap: 6px; padding: 5px 0 8px; }
+  .intro-row > div { min-width: 0; }
+  .eyebrow { font-size: 11px; }
+  .intro-row h1 { margin-top: 3px; font-size: clamp(20px, 5.3vw, 28px); line-height: 1.05; }
+  .how-to { width: auto; flex: 0 0 auto; }
+  .how-to summary { gap: 6px; padding: 6px 0; font-size: 12px; white-space: nowrap; }
+  .how-to-copy { left: auto; right: 0; width: min(340px, 85vw); font-size: 14px; }
+  .target-strip { min-height: 72px; grid-template-columns: 1fr auto; gap: 8px; padding: 9px 11px; border-radius: 14px; }
+  .target-copy { gap: 2px; }
+  .target-label, .attempts-heading > span { font-size: 11px; }
+  .target-copy strong { font-size: 25px; }
+  .target-sense { font-size: 11px; }
+  .attempts-box { min-width: 108px; padding-left: 9px; }
+  .attempts-heading strong { font-size: 16px; }
+  .attempts-box small, .attempt-empty, .attempt-used { font-size: 11px; }
+  .attempt-dots { min-height: 15px; }
+  .notice { margin-top: 6px; padding: 7px 9px; font-size: 13px; }
+  .clue-panel { min-height: 53px; flex-direction: row; gap: 5px; margin-top: 7px; padding: 7px 9px; border-radius: 12px; }
+  .clue-heading { min-width: 0; flex-direction: column; align-items: flex-start; gap: 1px; }
+  .clue-heading strong { font-size: 13px; }
+  .clue-kicker { font-size: 10px; }
+  .clue-values { gap: 5px; justify-content: flex-start; }
+  .clue-value { min-height: 28px; gap: 4px; padding: 3px 7px; font-size: 11px; }
+  .clue-value i { font-size: 11px; }
+  .guess-form { margin-top: 7px; padding: 8px 9px 7px; border-radius: 13px; }
+  .input-label { margin-bottom: 5px; font-size: 12px; }
+  .input-row { align-items: stretch; gap: 6px; }
+  .input-wrap { height: 44px; padding: 0 7px; }
+  .input-mark { margin-right: 5px; font-size: 15px; }
+  .input-wrap input { font-size: 16px; }
+  .clear-input { width: 24px; height: 24px; }
+  .submit-button { min-height: 44px; padding: 0 10px; gap: 5px; font-size: 11px; }
+  .input-foot { gap: 6px; margin-top: 4px; font-size: 10px; }
+  .input-foot span:first-child { max-width: 76%; }
+  .map-section { min-height: 0; }
+  .map-heading { margin-bottom: 5px; }
+  .map-heading h2 { margin-top: 3px; font-size: 17px; }
+  .section-label { gap: 5px; font-size: 10px; }
+  .section-label span:first-child { width: 20px; height: 20px; font-size: 10px; }
+  .map-count { font-size: 11px; }
+  .map-card { border-radius: 14px; }
+  .graph-scroll { min-height: 0; }
+  .graph-svg { width: auto; min-width: 690px; padding: 4px 8px 8px; }
+  .map-legend { min-height: 30px; gap: 11px; padding: 0 9px; font-size: 10px; }
+  .data-credit { margin-top: 3px; font-size: 9px; }
+  .page-footer { display: none; }
+  .finish-panel { padding: 9px; }
+  .finish-panel h2 { font-size: 19px; }
+  .finish-panel p { font-size: 12px; }
+  .connection-panel { max-height: 35vh; overflow-y: auto; padding: 10px; }
+  .connection-panel h2 { margin-top: 6px; font-size: 18px; }
+  .connection-panel > p { font-size: 12px; }
+  .connection-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 7px; }
+  .connection-option { min-height: 38px; padding: 5px 7px; font-size: 12px; }
+  .result-share { align-items: center; flex-direction: row; gap: 8px; margin-top: 6px; padding-top: 4px; }
+  .result-share p { font-size: 11px; }
+  .share-button { min-height: 36px; padding: 0 8px; font-size: 11px; }
+}
+
+@media (max-width: 380px) {
+  .page-shell { padding-right: 9px; padding-left: 9px; }
+  .challenge-select { max-width: 50vw; }
+  .intro-row h1 { font-size: 20px; }
+  .target-strip { gap: 5px; }
+  .attempts-box { min-width: 100px; }
+  .clue-values { gap: 4px; }
+  .clue-value { padding-right: 5px; padding-left: 5px; font-size: 10px; }
+  .input-foot { font-size: 9px; }
+  .input-foot span:first-child { max-width: 73%; }
+}
+
+@media (max-height: 620px) and (max-width: 700px) {
+  .page-shell { padding-top: 4px; }
+  .topbar { min-height: 32px; }
+  .challenge-select { min-height: 32px; }
+  .theme-toggle { width: 32px; height: 32px; }
+  .intro-row { padding-top: 2px; padding-bottom: 5px; }
+  .target-strip { min-height: 64px; }
+  .clue-panel { min-height: 46px; margin-top: 5px; padding-top: 5px; padding-bottom: 5px; }
+  .guess-form { margin-top: 5px; padding-top: 6px; padding-bottom: 5px; }
+  .input-wrap, .submit-button { min-height: 40px; height: 40px; }
+  .game-layout { grid-template-rows: auto minmax(90px, 1fr); gap: 5px; }
+  .map-heading h2 { font-size: 15px; }
+  .connection-panel { max-height: 30vh; }
+}
+
+/* Keep the two-column map readable in the desktop panel without horizontal overflow. */
+.graph-svg { width: 100%; min-width: 500px; padding: 8px 12px 12px; }
+.edge-label { font-size: 15px; }
+.target-eyebrow { font-size: 12px; }
+.target-label { font-size: 15px; }
+.guess-word { font-size: 18px; }
+.guess-meta { font-size: 14px; }
+.page-footer { font-size: 12px; }
+.data-credit { font-size: 12px; }
+
+@media (max-width: 700px) {
+  .graph-svg { width: 100%; min-width: 500px; padding: 4px 8px 8px; }
+  .clue-kicker, .section-label { font-size: 11px; }
+  .clue-value, .map-legend { font-size: 11px; }
+  .input-foot { font-size: 11px; }
+  .data-credit { font-size: 11px; }
+}
+
+@media (max-width: 380px) {
+  .clue-value, .input-foot { font-size: 11px; }
+}
