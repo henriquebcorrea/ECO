@@ -6,7 +6,7 @@ interface SemanticPayload {
   edges?: unknown;
 }
 
-type CompactEdge = [string, string, string];
+type CompactEdge = [string, string, string, number?];
 
 export async function loadSemanticEdges(): Promise<SemanticEdge[]> {
   try {
@@ -26,9 +26,14 @@ export async function loadSemanticEdges(): Promise<SemanticEdge[]> {
     if (!Array.isArray(payload.edges)) return [];
     return (payload.edges as CompactEdge[])
       .filter((edge) => Array.isArray(edge)
-        && edge.length === 3
-        && edge.every((value) => typeof value === "string"))
-      .map(([from, to, label]) => ({ from, to, label }));
+        && (edge.length === 3 || edge.length === 4)
+        && edge.slice(0, 3).every((value) => typeof value === "string"))
+      .map(([from, to, label, weight]) => ({
+        from,
+        to,
+        label,
+        ...(typeof weight === "number" ? { weight } : {}),
+      }));
   } catch {
     // O índice é um reforço local; as relações curadas seguem disponíveis se o asset falhar.
     return [];

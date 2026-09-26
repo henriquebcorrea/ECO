@@ -2,4 +2,7 @@ node_modules/
 dist/
 coverage/
 /data/
+/public/data/pt-br*.gz
+/public/vendor/hunspell-wrapper/
+/public/licenses/third-party-notices.txt
 .DS_Store

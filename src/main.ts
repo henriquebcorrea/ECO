@@ -9,28 +9,27 @@ import {
   getNode,
   getPilotDay,
   getSaoPauloDate,
-  getVisibleGuessEdges,
   isRoundState,
-  migrateLegacyRound,
-  normalizeWord,
+  MAX_GUESSES,
+  restoreRound,
   submitGuess,
-  type GuessFeedback,
   type Puzzle,
   type RoundMode,
   type RoundState,
   type SemanticEdge,
   type SemanticIndex,
+  type WordValidator,
   type WordNode,
 } from "./game";
 import { getPuzzleForPilotDay, puzzles } from "./data/puzzles";
 import { loadSemanticEdges } from "./data/semantic";
+import { loadPortugueseVocabulary, type PortugueseVocabulary } from "./data/vocabulary";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Elemento principal #app não encontrado.");
 
 const TODAY = getSaoPauloDate();
 const TODAY_INDEX = getPilotDay(TODAY);
-const themeKey = "eco:theme";
 const selectionKey = "eco:selection";
 
 interface ChallengeSelection {
@@ -65,10 +64,11 @@ let activeRoundKey = getRoundKey(selection);
 let activeStorageKey = getStorageKey(selection);
 let semanticEdges: SemanticEdge[] = [];
 let semanticIndex: SemanticIndex = createSemanticIndex(activePuzzle, semanticEdges);
+let vocabulary: PortugueseVocabulary | null = null;
+let vocabularyStatus: "loading" | "ready" | "failed" = "loading";
 let notice = "";
 let draftGuess = "";
-let theme = readTheme();
-let state = readState(activePuzzle, activeRoundKey, activeStorageKey, selection.mode);
+let state = createRound(activeRoundKey, selection.mode);
 
 function getRoundKey(value: ChallengeSelection): string {
   return value.mode === "daily" ? `daily:${TODAY}` : `practice:${value.practiceDay + 1}`;
@@ -83,29 +83,24 @@ function readState(
   roundKey: string,
   storageKey: string,
   mode: RoundMode,
+  validator: WordValidator,
 ): RoundState {
   try {
     const stored = localStorage.getItem(storageKey);
     if (!stored) return createRound(roundKey, mode);
     const parsed: unknown = JSON.parse(stored);
-    if (isRoundState(parsed, roundKey, mode, selectedPuzzle)) return parsed;
-    const migrated = migrateLegacyRound(parsed, roundKey, mode, selectedPuzzle);
-    if (migrated) {
-      localStorage.setItem(storageKey, JSON.stringify(migrated));
-      return migrated;
+    const restored = restoreRound(parsed, roundKey, mode, selectedPuzzle, validator);
+    if (restored) {
+      if (!isRoundState(parsed, roundKey, mode, selectedPuzzle)
+        || JSON.stringify(parsed) !== JSON.stringify(restored)) {
+        localStorage.setItem(storageKey, JSON.stringify(restored));
+      }
+      return restored;
     }
   } catch {
     // Uma falha de armazenamento não impede uma nova partida.
   }
   return createRound(roundKey, mode);
-}
-
-function readTheme(): "light" | "dark" {
-  try {
-    return localStorage.getItem(themeKey) === "dark" ? "dark" : "light";
-  } catch {
-    return "light";
-  }
 }
 
 function persistState(): void {
@@ -126,14 +121,6 @@ function persistSelection(): void {
   if (selection.mode === "practice") url.searchParams.set("treino", String(selection.practiceDay + 1));
   else url.searchParams.delete("treino");
   window.history.replaceState(null, "", url);
-}
-
-function persistTheme(): void {
-  try {
-    localStorage.setItem(themeKey, theme);
-  } catch {
-    // A escolha de tema segue funcionando nesta visita.
-  }
 }
 
 function scheduleDailyTurnover(): void {
@@ -158,19 +145,6 @@ function getTarget(selectedPuzzle: Puzzle): WordNode {
   return getNode(selectedPuzzle, selectedPuzzle.targetId)!;
 }
 
-function getLastFeedback(selectedPuzzle: Puzzle, round: RoundState): GuessFeedback | undefined {
-  const guess = round.guesses.at(-1);
-  return guess ? getFeedback(selectedPuzzle, getGuessNode(selectedPuzzle, guess), semanticIndex) : undefined;
-}
-
-function distanceCopy(distance: number): string {
-  return distance === 1 ? "1 conexão" : `${distance} conexões`;
-}
-
-function displayRelationPath(feedback: GuessFeedback): string {
-  return feedback.semanticPath?.relations.slice(0, 3).join(" → ") ?? "";
-}
-
 function renderChallengePicker(): string {
   const dailyOption = TODAY_INDEX === null
     ? ""
@@ -184,120 +158,106 @@ function renderChallengePicker(): string {
     </select>`;
 }
 
-const graphColumns = [125, 375];
+function renderUpdatedGraph(selectedPuzzle: Puzzle, round: RoundState): string {
+  const rows = round.guesses.slice(0, -1).map((guess, index) => {
+    const next = round.guesses[index + 1];
+    const feedback = getFeedback(selectedPuzzle, getGuessNode(selectedPuzzle, guess), semanticIndex);
+    const relation = next.relationFromPrevious ?? feedback.nextStep?.relation ?? "leva a";
+    return "<li class=\"connection-row\"><span class=\"trail-word trail-origin\">" + escapeHtml(guess.label)
+      + "</span><span class=\"trail-link\"><span>" + escapeHtml(relation)
+      + "</span><b aria-hidden=\"true\">↓</b></span><span class=\"trail-word trail-destination\">"
+      + escapeHtml(next.label) + "</span></li>";
+  }).join("");
 
-function edgePath(from: { x: number; y: number }, to: { x: number; y: number }, index: number): string {
-  const offset = index % 2 === 0 ? -16 : 16;
-  const midX = (from.x + to.x) / 2 + offset;
-  const midY = (from.y + to.y) / 2 - offset;
-  return `M ${from.x} ${from.y} Q ${midX} ${midY} ${to.x} ${to.y}`;
+  let connectionMarkup = rows;
+  if (round.activeStep) {
+    const step = round.activeStep;
+    const latest = round.status !== "solved";
+    const destination = round.status === "lost" ? step.answerLabel : step.isSecret ? "PALAVRA-CHAVE" : "????";
+    const ariaDestination = round.status === "lost" ? destination : "destino escondido";
+    connectionMarkup += "<li class=\"connection-row " + (latest ? "is-latest" : "") + "\" "
+      + (latest ? "data-latest=\"true\" " : "") + "aria-label=\"" + escapeHtml(step.fromLabel) + "; "
+      + escapeHtml(step.relation) + "; " + escapeHtml(ariaDestination) + "\">"
+      + "<span class=\"trail-word trail-origin\">" + escapeHtml(step.fromLabel) + "</span>"
+      + "<span class=\"trail-link\"><span>" + escapeHtml(step.relation) + "</span><b aria-hidden=\"true\">↓</b></span>"
+      + "<span class=\"trail-word " + (step.isSecret ? "trail-secret" : "trail-destination") + "\">"
+      + escapeHtml(destination) + "</span></li>";
+  }
+  if (round.status === "solved") {
+    const target = getTarget(selectedPuzzle);
+    connectionMarkup += "<li class=\"connection-row is-keyword-found\" data-latest=\"true\"><span class=\"trail-word trail-origin\">"
+      + escapeHtml(target.label) + "</span><span class=\"trail-link\"><span>palavra-chave encontrada</span>"
+      + "<b aria-hidden=\"true\">✓</b></span><span class=\"trail-word trail-destination\">"
+      + escapeHtml(target.label) + "</span></li>";
+  }
+
+  const unlinked = round.unlinked.map((guess, index) => {
+    const latest = !round.activeStep && round.status !== "solved" && index === round.unlinked.length - 1;
+    return "<li class=\"unlinked-word " + (latest ? "is-latest" : "") + "\" "
+      + (latest ? "data-latest=\"true\" " : "") + "><span class=\"trail-word\">"
+      + escapeHtml(guess.label) + "</span><span class=\"unlinked-label\">Sem elo conhecido nesta rota</span></li>";
+  }).join("");
+  const empty = round.guesses.length === 0 && round.unlinked.length === 0
+    ? "<div class=\"map-empty\"><span aria-hidden=\"true\">✳</span><p>Seu primeiro palpite abre uma trilha.</p><small>Acerte cada próximo elo para avançar.</small></div>"
+    : "";
+  return "<div class=\"graph-scroll\" tabindex=\"0\" aria-label=\"Mapa da trilha semântica; use as setas para navegar\"><div class=\"trail-content\">"
+    + (connectionMarkup ? "<section class=\"trail-area\" aria-labelledby=\"known-trail-title\"><h3 id=\"known-trail-title\">TRILHA CONFIRMADA</h3><ol class=\"connection-list\">"
+      + connectionMarkup + "</ol></section>" : "")
+    + (unlinked ? "<section class=\"unlinked-area\" aria-labelledby=\"unlinked-trail-title\"><h3 id=\"unlinked-trail-title\">PALPITES SEM ELO</h3><ul class=\"unlinked-list\">"
+      + unlinked + "</ul></section>" : "")
+    + empty + "</div></div>";
 }
 
 function renderGraph(selectedPuzzle: Puzzle, round: RoundState): string {
-  const guesses = round.guesses;
-  const target = getTarget(selectedPuzzle);
-  const targetVisible = round.status === "solved";
-  const targetPosition = { x: 250, y: 64 };
-  const rowHeight = 142;
-  const firstRowY = 191;
-  const rowCount = Math.max(1, Math.ceil(guesses.length / graphColumns.length));
-  const graphHeight = Math.max(380, firstRowY + rowCount * rowHeight + 36);
-  const guessPositions = new Map(guesses.map((guess, index) => [
-    guess.id,
-    { x: graphColumns[index % graphColumns.length], y: firstRowY + Math.floor(index / graphColumns.length) * rowHeight },
-  ]));
-
-  const directEdges = getVisibleGuessEdges(guesses, semanticIndex);
-  const guessedEdges = directEdges.map((edge, index) => {
-    const from = guessPositions.get(edge.from);
-    const to = guessPositions.get(edge.to);
-    if (!from || !to) return "";
-    return `<g class="graph-edge-group">
-      <path class="graph-edge ${index === directEdges.length - 1 ? "edge-new" : ""}" d="${edgePath(from, to, index)}" />
-      <text class="edge-label" x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2 - 12}" text-anchor="middle">${escapeHtml(edge.label)}</text>
-    </g>`;
-  }).join("");
-
-  const targetEdges = guesses.map((guess, index) => {
-    const node = getGuessNode(selectedPuzzle, guess);
-    const feedback = getFeedback(selectedPuzzle, node, semanticIndex);
-    if (feedback.distance !== 1) return "";
-    const position = guessPositions.get(guess.id)!;
-    const label = semanticIndex.adjacency.get(normalizeWord(guess.label))?.get(normalizeWord(target.label));
-    const edgeLabel = targetVisible ? label ?? "conexão" : "?";
-    return `<g class="graph-edge-group edge-to-target">
-      <path class="graph-edge ${index === guesses.length - 1 ? "edge-new" : ""}" d="${edgePath(position, targetPosition, index)}" />
-      <text class="edge-label ${targetVisible ? "" : "edge-secret-label"}" x="${(position.x + targetPosition.x) / 2}" y="${(position.y + targetPosition.y) / 2 - 12}" text-anchor="middle">${escapeHtml(edgeLabel)}</text>
-    </g>`;
-  }).join("");
-
-  const targetNode = `<g class="graph-node target-node ${targetVisible ? "target-revealed" : "target-hidden"}" transform="translate(${targetPosition.x - 78} ${targetPosition.y - 31})" aria-label="${targetVisible ? `Resposta: ${escapeHtml(target.label)}` : "Palavra secreta"}">
-      <rect width="156" height="62" rx="22" />
-      <text class="target-eyebrow" x="78" y="22" text-anchor="middle">${targetVisible ? "RESPOSTA" : "PALAVRA SECRETA"}</text>
-      <text class="target-label" x="78" y="45" text-anchor="middle">${targetVisible ? escapeHtml(target.label) : "?????"}</text>
-    </g>`;
-
-  const guessMarkup = guesses.map((guess, index) => {
-    const position = guessPositions.get(guess.id)!;
-    const node = getGuessNode(selectedPuzzle, guess);
-    const feedback = getFeedback(selectedPuzzle, node, semanticIndex);
-    const latest = index === guesses.length - 1;
-    const winning = guess.id === selectedPuzzle.targetId;
-    const letters = feedback.sharedLetters.length === 0 ? "0 letras" : `${feedback.sharedLetters.length} ${feedback.sharedLetters.length === 1 ? "letra" : "letras"}`;
-    const distance = feedback.distance === null ? "sem caminho" : `${feedback.distance} conex.`;
-    const path = displayRelationPath(feedback);
-    const meta = path ? `${distance} · ${letters}` : `${distance} · ${letters}`;
-    return `<g class="graph-node guess-node ${latest ? "guess-latest" : ""} ${winning ? "guess-winning" : ""}" transform="translate(${position.x - 78} ${position.y - 34})" aria-label="${escapeHtml(node.label)}; ${feedback.distance === null ? "sem relação registrada" : distanceCopy(feedback.distance)}; ${letters} em comum${path ? `; ${escapeHtml(path)}` : ""}">
-      <rect width="156" height="68" rx="20" />
-      <text class="guess-word" x="78" y="29" text-anchor="middle">${escapeHtml(node.label)}</text>
-      <text class="guess-meta" x="78" y="51" text-anchor="middle">${escapeHtml(meta)}</text>
-    </g>`;
-  }).join("");
-
-  const empty = guesses.length === 0
-    ? `<g class="graph-empty" transform="translate(250 ${Math.max(250, graphHeight - 92)})"><circle r="48" /><text y="7" text-anchor="middle">ECO</text></g>`
-    : "";
-
-  return `<div class="graph-scroll" tabindex="0" aria-label="Mapa semântico; use as setas para navegar">
-    <svg class="graph-svg" viewBox="0 0 500 ${graphHeight}" role="img" aria-label="Mapa com ${guesses.length} ${guesses.length === 1 ? "palpite" : "palpites"} e suas conexões">
-      <defs>
-        <marker id="edge-dot" viewBox="0 0 8 8" refX="4" refY="4" markerWidth="6" markerHeight="6"><circle cx="4" cy="4" r="3" /></marker>
-      </defs>
-      <path class="target-stem" d="M 250 95 L 250 129" />
-      ${guessedEdges}${targetEdges}${targetNode}${guessMarkup}${empty}
-    </svg>
-  </div>`;
+  return renderUpdatedGraph(selectedPuzzle, round);
+}
+function renderUpdatedClue(selectedPuzzle: Puzzle, round: RoundState): string {
+  const step = round.activeStep;
+  if (!step && round.status === "lost") {
+    return "<section class=\"clue-panel clue-solved\" aria-label=\"Rodada encerrada\"><span class=\"clue-spark\" aria-hidden=\"true\">↗</span><p>A palavra-chave era <strong>"
+      + escapeHtml(getTarget(selectedPuzzle).label) + "</strong>. Tente outra rota no próximo desafio.</p></section>";
+  }
+  if (!step) {
+    return "<section class=\"clue-panel clue-empty\" aria-label=\"Pistas\"><span class=\"clue-spark\" aria-hidden=\"true\">✳</span><p>Escolha uma palavra para abrir uma trilha. O destino do elo fica escondido.</p></section>";
+  }
+  if (round.status === "solved") {
+    return "<section class=\"clue-panel clue-solved\" aria-label=\"Pistas do último palpite\" aria-live=\"polite\"><span class=\"clue-spark\" aria-hidden=\"true\">✓</span><p>Você encontrou a palavra-chave. Agora escolha a conexão para abrir o caminho secreto.</p></section>";
+  }
+  const revealed = Array.from(step.answerLabel).slice(0, step.revealedLetters).join("");
+  const destination = round.status === "lost"
+    ? step.answerLabel
+    : step.revealedLetters > 0
+      ? revealed + " _".repeat(Math.max(0, Array.from(step.answerLabel).length - step.revealedLetters))
+      : "????";
+  const heading = step.isSecret ? "PALAVRA-CHAVE" : "PRÓXIMO ELO";
+  const message = round.status === "lost"
+    ? "O elo que faltou era " + step.answerLabel + "."
+    : "Erros válidos revelam uma letra · " + round.attemptCount + "/" + MAX_GUESSES + " palpites usados. Digite a palavra que completa a relação.";
+  return "<section class=\"clue-panel clue-active\" aria-label=\"Pistas do último palpite\" aria-live=\"polite\">"
+    + "<div class=\"clue-heading\"><span class=\"clue-kicker\">" + heading + "</span><strong>"
+    + escapeHtml(step.fromLabel) + "</strong></div><div class=\"clue-flow\"><span class=\"clue-relation\">"
+    + escapeHtml(step.relation) + "</span><span class=\"clue-flow-arrow\" aria-hidden=\"true\">↓</span>"
+    + "<strong class=\"clue-next " + (step.isSecret ? "is-secret" : "") + "\">" + escapeHtml(destination)
+    + "</strong></div><p class=\"clue-instruction\">" + escapeHtml(message) + "</p></section>";
 }
 
 function renderLatestClue(selectedPuzzle: Puzzle, round: RoundState): string {
-  const feedback = getLastFeedback(selectedPuzzle, round);
-  if (!feedback) {
-    return `<section class="clue-panel clue-empty" aria-label="Pistas"><span class="clue-spark" aria-hidden="true">✳</span><p>Seu primeiro palpite abre o mapa.</p></section>`;
-  }
-  const sharedText = feedback.sharedLetters.length === 0
-    ? "Nenhuma letra em comum"
-    : `${feedback.sharedLetters.length} ${feedback.sharedLetters.length === 1 ? "letra" : "letras"} em comum`;
-  const relationPath = displayRelationPath(feedback);
-  return `<section class="clue-panel" aria-label="Pistas do último palpite" aria-live="polite">
-    <div class="clue-heading"><span class="clue-kicker">ÚLTIMO ECO</span><strong>${escapeHtml(feedback.node.label)}</strong></div>
-    <div class="clue-values">
-      ${feedback.distance !== null ? `<span class="clue-value clue-good"><i aria-hidden="true">↔</i>${distanceCopy(feedback.distance)}</span>` : ""}
-      ${relationPath ? `<span class="clue-value clue-relation"><i aria-hidden="true">⌁</i>${escapeHtml(relationPath)}</span>` : ""}
-      <span class="clue-value ${feedback.sharedLetters.length ? "clue-good" : "clue-muted"}"><i aria-hidden="true">Aa</i>${sharedText}</span>
-    </div>
-  </section>`;
+  return renderUpdatedClue(selectedPuzzle, round);
+}
+function renderUpdatedStatus(selectedPuzzle: Puzzle, round: RoundState): string {
+  if (round.status === "playing") return "";
+  const target = getTarget(selectedPuzzle);
+  const won = round.status === "solved";
+  return "<section class=\"finish-panel " + (won ? "finish-win" : "finish-loss") + "\" aria-live=\"polite\">"
+    + "<div class=\"finish-mark\" aria-hidden=\"true\">" + (won ? "✳" : "↗") + "</div><div><span class=\"clue-kicker\">"
+    + (won ? "VOCÊ ENCONTROU" : "FIM DAS TENTATIVAS") + "</span><h2>" + escapeHtml(target.label)
+    + "</h2><p>" + escapeHtml(selectedPuzzle.sense) + " · " + round.attemptCount + "/" + MAX_GUESSES
+    + " palpites</p></div></section>";
 }
 
 function renderStatus(selectedPuzzle: Puzzle, round: RoundState): string {
-  if (round.status !== "solved") return "";
-  const target = getTarget(selectedPuzzle);
-  const count = round.guesses.length;
-  return `<section class="finish-panel finish-win" aria-live="polite">
-    <div class="finish-mark" aria-hidden="true">✳</div>
-    <div><span class="clue-kicker">VOCÊ ENCONTROU</span><h2>${escapeHtml(target.label)}</h2><p>${escapeHtml(selectedPuzzle.sense)} · ${count} ${count === 1 ? "palpite" : "palpites"}</p></div>
-  </section>`;
+  return renderUpdatedStatus(selectedPuzzle, round);
 }
-
 function renderConnectionQuiz(selectedPuzzle: Puzzle, round: RoundState): string {
   if (round.status !== "solved") return "";
   if (round.connectionChoice === null) {
@@ -331,6 +291,18 @@ function activeDayNumber(): number {
 }
 
 function shareText(round: RoundState): string {
+  if (round.status !== "playing") {
+    const day = activeDayNumber();
+    const trail = round.guesses.map((guess) => guess.label).join(" → ");
+    const url = new URL(window.location.href);
+    if (selection.mode === "practice") url.searchParams.set("treino", String(day));
+    else url.searchParams.delete("treino");
+    const mode = selection.mode === "practice" ? "treino" : "desafio diário";
+    const result = round.status === "solved"
+      ? "Resolvi em " + round.attemptCount + "/" + MAX_GUESSES + " palpites"
+      : "A palavra-chave era " + getTarget(activePuzzle).label + " · " + round.attemptCount + "/" + MAX_GUESSES;
+    return "ECO · " + mode + " " + day + "/7\n" + result + "\n" + trail + "\n\nJogue: " + url.href;
+  }
   const day = activeDayNumber();
   const trail = round.guesses.map((guess) => guess.label).join(" → ");
   const outcome = `Resolvi em ${round.guesses.length} ${round.guesses.length === 1 ? "palpite" : "palpites"}`;
@@ -342,25 +314,24 @@ function shareText(round: RoundState): string {
 }
 
 function render(): void {
-  document.documentElement.dataset.theme = theme;
-  const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (themeColor) themeColor.content = theme === "dark" ? "#111914" : "#f3f2eb";
   const day = activeDayNumber();
-  const used = state.guesses.length;
+  const used = state.attemptCount;
+  const mapCount = state.guesses.length + state.unlinked.length;
   const isPlaying = state.status === "playing";
-  const newestGuess = state.guesses.at(-1);
+  const newestGuess = state.guesses.at(-1) ?? state.unlinked.at(-1);
+  const inputDisabled = vocabularyStatus !== "ready";
 
   app!.innerHTML = `<main class="page-shell">
     <header class="topbar">
       <a class="wordmark" href="/" aria-label="ECO início">ECO<span>.</span></a>
-      <div class="topbar-meta">${renderChallengePicker()}<button class="theme-toggle" type="button" aria-label="${theme === "dark" ? "Ativar tema claro" : "Ativar tema escuro"}" title="Alternar tema">${theme === "dark" ? "☼" : "◐"}</button></div>
+      <div class="topbar-meta">${renderChallengePicker()}</div>
     </header>
 
     <div class="game-layout">
       <section class="game-panel" aria-label="Partida">
         <section class="intro-row">
           <div><span class="eyebrow">${selection.mode === "daily" ? `${escapeHtml(formatDate(TODAY))} · DESAFIO DIÁRIO` : `TREINO ${String(day).padStart(2, "0")} · ${escapeHtml(formatDate(activePuzzle.date))}`}</span><h1>Uma palavra. <em>Vários caminhos.</em></h1></div>
-          <details class="how-to"><summary>Como jogar <span aria-hidden="true">＋</span></summary><div class="how-to-copy"><p>Digite qualquer palavra. O ECO mostra conexões conhecidas e letras em comum; palavras sem relação no mapa também valem.</p><p>Ao encontrar a resposta, escolha a relação que abre o caminho secreto.</p></div></details>
+          <details class="how-to"><summary>Como jogar <span aria-hidden="true">＋</span></summary><div class="how-to-copy"><p>Digite uma palavra do vocabulário português. O mapa revela o próximo elo conhecido e a relação entre as palavras; algumas palavras válidas não têm rota registrada.</p><p>Use uma palavra por palpite. As tentativas são ilimitadas. Ao encontrar a resposta, escolha a conexão que abre o caminho secreto.</p></div></details>
         </section>
 
         <section class="target-strip" aria-label="Palavra secreta e palpites">
@@ -369,12 +340,14 @@ function render(): void {
         </section>
 
         ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ""}
+        ${vocabularyStatus === "loading" ? `<p class="vocabulary-status" role="status">Carregando o vocabulário português offline…</p>` : ""}
+        ${vocabularyStatus === "failed" ? `<p class="vocabulary-status vocabulary-error" role="alert">Não consegui carregar o vocabulário offline. Recarregue a página para tentar novamente.</p>` : ""}
         ${renderLatestClue(activePuzzle, state)}
 
         ${isPlaying ? `<form class="guess-form" id="guess-form" autocomplete="off">
-          <label class="input-label" for="guess-input">Qual palavra você quer testar?</label>
-          <div class="input-row"><div class="input-wrap"><span class="input-mark" aria-hidden="true">↳</span><input id="guess-input" name="guess" type="text" value="${escapeHtml(draftGuess)}" placeholder="Digite qualquer palavra…" aria-describedby="input-help" required /><button class="clear-input" type="button" aria-label="Limpar palavra">×</button></div><button class="submit-button" type="submit">ECOAR <span aria-hidden="true">↗</span></button></div>
-          <div class="input-foot"><span id="input-help">Uma palavra diferente, uma nova conexão possível.</span><span>sem limite</span></div>
+          <label class="input-label" for="guess-input">Digite uma palavra em português</label>
+          <div class="input-row"><div class="input-wrap"><span class="input-mark" aria-hidden="true">↳</span><input id="guess-input" name="guess" type="text" value="${escapeHtml(draftGuess)}" placeholder="Uma palavra…" aria-describedby="input-help" autocomplete="off" autocapitalize="none" spellcheck="false" ${inputDisabled ? "disabled" : ""} required /><button class="clear-input" type="button" aria-label="Limpar palavra" ${inputDisabled ? "disabled" : ""}>×</button></div><button class="submit-button" type="submit" ${inputDisabled ? "disabled" : ""}>ECOAR <span aria-hidden="true">↗</span></button></div>
+          <div class="input-foot"><span id="input-help">Uma palavra por palpite. Sem limite de tentativas.</span><span>pt-BR</span></div>
         </form>` : ""}
 
         ${renderStatus(activePuzzle, state)}
@@ -384,20 +357,51 @@ function render(): void {
 
       <section class="map-section" aria-labelledby="map-title">
         <div class="map-heading"><div><div class="section-label"><span>01</span><span>SEU MAPA</span></div><h2 id="map-title">Cada palpite deixa um eco.</h2></div><span class="map-count">${used} ${used === 1 ? "palavra" : "palavras"}</span></div>
-        <div class="map-card">${renderGraph(activePuzzle, state)}<div class="map-legend"><span><i class="legend-node"></i>palpite</span><span><i class="legend-link"></i>relação registrada</span></div></div>
-        <p class="data-credit">Relações semânticas: <a href="https://conceptnet.io/" target="_blank" rel="noreferrer">ConceptNet 5.7</a> · CC BY-SA 4.0</p>
+        <div class="map-card">${renderGraph(activePuzzle, state)}<div class="map-legend"><span><i class="legend-node"></i>palpite</span><span><i class="legend-link"></i>elo e relação</span><span><i class="legend-unlinked"></i>sem elo</span></div></div>
+        <p class="data-credit">Relações: <a href="https://conceptnet.io/" target="_blank" rel="noreferrer">ConceptNet 5.7</a> · CC BY-SA 4.0 · <a href="${import.meta.env.BASE_URL}licenses/third-party-notices.txt" target="_blank" rel="noreferrer">dicionário VERO e licenças</a></p>
       </section>
     </div>
 
     <footer class="page-footer"><span>Seu progresso fica salvo neste navegador.</span><span>${newestGuess ? `${used} ${used === 1 ? "palavra" : "palavras"} no mapa` : "Um jogo sem pressa, sem conta e sem barulho."}</span></footer>
   </main>`;
 
-  bindThemeToggle();
+  const mapCountElement = app!.querySelector<HTMLElement>(".map-count");
+  if (mapCountElement) mapCountElement.textContent = mapCount + (mapCount === 1 ? " palavra" : " palavras");
+  const mapTitle = app!.querySelector<HTMLElement>("#map-title");
+  if (mapTitle) mapTitle.textContent = "Cada elo confirmado abre caminho.";
+  const mapLegendNode = app!.querySelector<HTMLElement>(".map-legend span:first-child");
+  if (mapLegendNode) mapLegendNode.lastChild!.textContent = "palavra confirmada";
+  const attemptCountElement = app!.querySelector<HTMLElement>(".attempts-heading strong");
+  if (attemptCountElement) attemptCountElement.textContent = used + "/" + MAX_GUESSES;
+  const attemptLabel = app!.querySelector<HTMLElement>(".attempt-dots");
+  if (attemptLabel) {
+    attemptLabel.textContent = used === 0 ? MAX_GUESSES + " palpites disponíveis" : used + "/" + MAX_GUESSES + " usados";
+    attemptLabel.setAttribute("aria-label", used + " de " + MAX_GUESSES + " palpites usados");
+  }
+  const attemptHelp = app!.querySelector<HTMLElement>(".attempts-box small");
+  if (attemptHelp) attemptHelp.textContent = "erros revelam letras";
+  const targetHint = app!.querySelector<HTMLElement>(".target-sense");
+  if (targetHint && isPlaying) targetHint.textContent = "palavra-chave em segredo";
+  const inputHelp = app!.querySelector<HTMLElement>("#input-help");
+  if (inputHelp) inputHelp.textContent = "Cada erro válido revela uma letra. Máximo de " + MAX_GUESSES + " palpites.";
+  const helpCopy = app!.querySelector<HTMLElement>(".how-to-copy");
+  if (helpCopy) helpCopy.innerHTML = "<p>Digite uma palavra válida para iniciar uma rota. Depois, descubra o próximo elo escondido pela relação indicada; a palavra não aparece no mapa.</p><p>Erros válidos revelam uma letra. Você tem até "
+    + MAX_GUESSES + " palpites para alcançar a palavra-chave. Palavras repetidas ou fora do dicionário não contam.</p>";
+  const resultCopy = app!.querySelector<HTMLElement>(".result-share p");
+  if (resultCopy && state.status === "lost") {
+    resultCopy.textContent = "As tentativas acabaram. A palavra-chave era " + getTarget(activePuzzle).label + ".";
+  }
+  const footerMapCount = app!.querySelector<HTMLElement>(".page-footer span:last-child");
+  if (footerMapCount && mapCount > 0) footerMapCount.textContent = mapCount + (mapCount === 1 ? " palavra no mapa" : " palavras no mapa");
+
   bindChallengePicker();
   bindGuessForm();
   bindConnectionOptions();
   bindShareButton();
   bindGraphScroll();
+  const scrollBehavior = nextMapScrollBehavior;
+  nextMapScrollBehavior = "auto";
+  window.requestAnimationFrame(() => scrollMapToLatest(scrollBehavior));
 }
 
 function switchChallenge(value: string): void {
@@ -412,20 +416,14 @@ function switchChallenge(value: string): void {
   activePuzzle = getPuzzleForPilotDay(selection.mode === "daily" ? TODAY_INDEX! : selection.practiceDay)!;
   activeRoundKey = getRoundKey(selection);
   activeStorageKey = getStorageKey(selection);
-  semanticIndex = createSemanticIndex(activePuzzle, semanticEdges);
-  state = readState(activePuzzle, activeRoundKey, activeStorageKey, selection.mode);
+  semanticIndex = createActiveSemanticIndex();
+  state = vocabulary
+    ? readState(activePuzzle, activeRoundKey, activeStorageKey, selection.mode, vocabulary.isValidGuess)
+    : createRound(activeRoundKey, selection.mode);
   notice = "";
   draftGuess = "";
   persistSelection();
   render();
-}
-
-function bindThemeToggle(): void {
-  document.querySelector<HTMLButtonElement>(".theme-toggle")?.addEventListener("click", () => {
-    theme = theme === "dark" ? "light" : "dark";
-    persistTheme();
-    render();
-  });
 }
 
 function bindChallengePicker(): void {
@@ -442,9 +440,20 @@ function bindGuessForm(): void {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     draftGuess = input.value;
-    const result = submitGuess(activePuzzle, state, input.value, semanticIndex);
+    if (!vocabulary) {
+      notice = "O vocabulário ainda está carregando. Tente novamente em instantes.";
+      render();
+      return;
+    }
+    const result = submitGuess(activePuzzle, state, input.value, semanticIndex, vocabulary.isValidGuess);
     if (result.kind === "empty") {
       notice = "Digite uma palavra para ecoar.";
+      render();
+      document.querySelector<HTMLInputElement>("#guess-input")?.focus();
+      return;
+    }
+    if (result.kind === "invalid") {
+      notice = "Essa palavra não está no dicionário pt-BR. Confira a grafia e tente uma palavra só.";
       render();
       document.querySelector<HTMLInputElement>("#guess-input")?.focus();
       return;
@@ -458,11 +467,23 @@ function bindGuessForm(): void {
     if (result.kind === "finished") return;
     state = result.state;
     draftGuess = "";
-    notice = "";
+    notice = result.outcome === "wrong"
+      ? "Essa não. Uma letra do elo escondido foi revelada."
+      : result.outcome === "advanced"
+        ? "Elo confirmado. Descubra a próxima palavra."
+        : result.outcome === "started"
+          ? "A trilha começou. Descubra o próximo elo."
+          : result.outcome === "unlinked"
+            ? "Essa palavra não tem elo conhecido. Tente outra para abrir a trilha."
+            : result.outcome === "lost"
+              ? "Suas 12 tentativas acabaram."
+              : result.outcome === "solved"
+                ? "Você encontrou a palavra-chave."
+                : "";
     persistState();
+    nextMapScrollBehavior = "smooth";
     render();
     if (state.status === "playing") document.querySelector<HTMLInputElement>("#guess-input")?.focus();
-    document.querySelector<HTMLElement>(".graph-scroll")?.scrollTo({ left: 0, top: 0, behavior: "smooth" });
   });
   document.querySelector<HTMLButtonElement>(".clear-input")?.addEventListener("click", () => {
     draftGuess = "";
@@ -531,11 +552,30 @@ function bindGraphScroll(): void {
   const graph = document.querySelector<HTMLDivElement>(".graph-scroll");
   if (!graph) return;
   graph.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowRight") graph.scrollBy({ left: 120, behavior: "smooth" });
-    if (event.key === "ArrowLeft") graph.scrollBy({ left: -120, behavior: "smooth" });
     if (event.key === "ArrowDown") graph.scrollBy({ top: 100, behavior: "smooth" });
     if (event.key === "ArrowUp") graph.scrollBy({ top: -100, behavior: "smooth" });
   });
+}
+
+let nextMapScrollBehavior: ScrollBehavior = "auto";
+
+function scrollMapToLatest(behavior: ScrollBehavior): void {
+  const graph = document.querySelector<HTMLDivElement>(".graph-scroll");
+  const latest = graph?.querySelector<HTMLElement>("[data-latest='true']");
+  if (!graph || !latest) return;
+  const graphRect = graph.getBoundingClientRect();
+  const latestRect = latest.getBoundingClientRect();
+  const centeredTop = graph.scrollTop + latestRect.top - graphRect.top
+    - Math.max(14, (graph.clientHeight - latest.offsetHeight) / 2);
+  graph.scrollTo({ top: Math.max(0, centeredTop), behavior });
+}
+
+function createActiveSemanticIndex(): SemanticIndex {
+  return createSemanticIndex(
+    activePuzzle,
+    semanticEdges,
+    (term) => vocabulary?.resolveGraphTerm(term, activePuzzle) ?? null,
+  );
 }
 
 function validatePuzzleData(): void {
@@ -550,8 +590,10 @@ function validatePuzzleData(): void {
         if (!getNode(item, edge.from) || !getNode(item, edge.to)) throw new Error(`Aresta sem nó em ${item.date}: ${edge.from} → ${edge.to}`);
       }
       const index = createSemanticIndex(item, semanticEdges);
-      for (const id of item.nodes.map((word) => word.id)) {
-        if (getFeedback(item, getNode(item, id)!, index).distance === null) throw new Error(`Nó desconectado da resposta: ${item.date}/${id}`);
+      for (const id of item.secretRoute.slice(0, -1)) {
+        if (!getFeedback(item, getNode(item, id)!, index).nextStep) {
+          throw new Error(`Elo sem caminho até a resposta: ${item.date}/${id}`);
+        }
       }
       for (let routeIndex = 1; routeIndex < item.secretRoute.length; routeIndex += 1) {
         const left = item.secretRoute[routeIndex - 1];
@@ -569,12 +611,21 @@ function validatePuzzleData(): void {
 
 validatePuzzleData();
 render();
-void loadSemanticEdges().then((loadedEdges) => {
-  if (loadedEdges.length === 0) return;
-  const wasGuessFocused = document.activeElement?.id === "guess-input";
-  semanticEdges = loadedEdges;
-  semanticIndex = createSemanticIndex(activePuzzle, semanticEdges);
+void loadPortugueseVocabulary().then((loadedVocabulary) => {
+  vocabulary = loadedVocabulary;
+  vocabularyStatus = "ready";
+  state = readState(activePuzzle, activeRoundKey, activeStorageKey, selection.mode, loadedVocabulary.isValidGuess);
+  semanticIndex = createActiveSemanticIndex();
   render();
-  if (wasGuessFocused) document.querySelector<HTMLInputElement>("#guess-input")?.focus();
+  return loadSemanticEdges();
+}).then((loadedEdges) => {
+  if (loadedEdges.length === 0) return;
+  semanticEdges = loadedEdges;
+  semanticIndex = createActiveSemanticIndex();
+  render();
+}).catch(() => {
+  vocabularyStatus = "failed";
+  notice = "";
+  render();
 });
 scheduleDailyTurnover();

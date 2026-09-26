@@ -1,6 +1,6 @@
 # ECO
 
-Um jogo diário de palavras em português. Cada palpite deixa uma pista e uma relação no mapa. O piloto inclui sete desafios curados, um treino com os sete dias e não usa servidor, conta ou API paga.
+Um jogo diário de palavras em português. Cada rodada tem até 12 palpites válidos: um palpite inicia uma trilha e cada elo seguinte precisa ser descoberto antes de entrar no mapa. A relação aparece sem revelar a palavra; cada erro válido mostra mais uma letra. Ao chegar à palavra-chave, uma pergunta final pode abrir uma rota secreta. O piloto inclui sete desafios curados, treino com os sete dias e não usa servidor, conta ou API paga.
 
 ## Rodar localmente
 
@@ -22,11 +22,17 @@ npm run build
 
 O build define o início do piloto para o dia da publicação em São Paulo. Se precisar agendar outra data, defina `VITE_PILOT_START_DATE` no formato `AAAA-MM-DD` nas variáveis de build. Os sete desafios seguem a ordem do arquivo `src/data/puzzles.ts` e abrem em dias consecutivos.
 
-## Relações semânticas
+## Palpites e conexões
 
-O índice local `public/data/conceptnet-pt.json.gz` contém arestas em português do ConceptNet 5.7.0. O app não consulta serviços externos durante a partida. O índice é um recorte das relações com peso a partir de 1.0 e nomes de relação usados pelo jogo; conexões que passem por conceitos com mais de 80 ligações não encurtam a distância, para evitar atalhos genéricos.
+Os palpites são verificados localmente com Hunspell e o dicionário pt-BR VERO. O app aceita flexões e compostos hifenizados listados no dicionário; exige uma palavra por palpite e não sugere correções. Palavras repetidas ou fora do vocabulário não consomem tentativa. Palavras próprias usadas pelos desafios continuam aceitas. Uma palavra válida sem rota registrada aparece separada e não recebe uma conexão inventada; esse palpite consome uma tentativa.
+
+As rotas revisadas do desafio têm prioridade sobre relações amplas do ConceptNet para manter as pistas previsíveis. O mapa só confirma uma ligação quando o jogador acerta o próximo elo. O progresso de cada partida fica salvo separadamente no navegador.
+
+O índice local `public/data/conceptnet-pt.json.gz` contém arestas em português do ConceptNet 5.7.0, junto das conexões revisadas dos desafios. O jogo preserva a direção das relações, ignora relações genéricas e não usa conceitos com mais de 80 ligações como atalhos internos. Nenhuma requisição semântica é feita durante a partida.
 
 Para regenerar o índice, baixe o arquivo `conceptnet-assertions-5.7.0.csv.gz` da [página oficial de downloads do ConceptNet](https://github.com/commonsense/conceptnet5/wiki/Downloads), salve-o em `data/conceptnet-assertions-5.7.0.csv.gz` e rode `npm run prepare:conceptnet`. O arquivo original não deve ser commitado. O ConceptNet é disponibilizado sob CC BY-SA 4.0; a atribuição aparece no jogo e esta cópia adaptada mantém a licença. Consulte a [licença do ConceptNet](https://www.conceptnet.io/c/en/get_licence).
+
+O `predev` e o `prebuild` geram os arquivos compactados do dicionário e do motor WebAssembly a partir das dependências npm. Para gerar esses assets manualmente, rode `npm run prepare:dictionary`. Os arquivos gerados ficam fora do controle de versão; a página de créditos lista as fontes e as licenças do VERO e do Hunspell.
 
 ## Publicar gratuitamente
 

@@ -20,7 +20,6 @@ const relations = new Map([
   ["/r/MadeOf", "é feito de"],
   ["/r/PartOf", "faz parte de"],
   ["/r/ReceivesAction", "recebe"],
-  ["/r/RelatedTo", "tem relação com"],
   ["/r/SimilarTo", "é semelhante a"],
   ["/r/Synonym", "é sinônimo de"],
   ["/r/Antonym", "é o oposto de"],
@@ -31,8 +30,7 @@ function normalize(value) {
   return value
     .trim()
     .toLocaleLowerCase("pt-BR")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
     .replace(/_/g, " ")
     .replace(/\s+/g, " ");
 }
@@ -72,7 +70,9 @@ for await (const line of lines) {
   const from = conceptFromUri(fields[2]);
   const to = conceptFromUri(fields[3]);
   if (!from || !to || from === to) continue;
-  uniqueEdges.set(`${from}\t${to}\t${label}`, [from, to, label]);
+  const key = `${from}\t${to}\t${label}`;
+  const existing = uniqueEdges.get(key);
+  if (!existing || weight > existing[3]) uniqueEdges.set(key, [from, to, label, weight]);
   portugueseEdges += 1;
 }
 

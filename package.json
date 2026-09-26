@@ -4,15 +4,22 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node tools/prepare-dictionary.mjs",
     "dev": "vite",
+    "prebuild": "node tools/prepare-dictionary.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "prepare:conceptnet": "node tools/prepare-conceptnet.mjs",
+    "prepare:dictionary": "node tools/prepare-dictionary.mjs",
     "test": "vitest run"
   },
   "devDependencies": {
+    "dictionary-pt": "^4.0.0",
     "typescript": "^5.9.3",
     "vite": "^6.4.1",
     "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "hunspell-wasm": "^0.3.0"
   }
 }
