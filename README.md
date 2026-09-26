@@ -47,4 +47,4 @@ O ECO não usa Pages Functions, banco ou variáveis secretas. O plano Free do Cl
 
 ## Privacidade e progresso
 
-Palpites, resposta da pergunta final, seleção diário/treino e tema ficam no armazenamento local do navegador. Cada dia de treino tem uma partida salva separadamente. Não há coleta de resultados nem comparação global entre jogadores. Para compartilhar, o ECO usa o recurso nativo do navegador ou copia o texto para a área de transferência.
+Palpites, resposta da pergunta final e seleção diário/treino ficam no armazenamento local do navegador. Cada dia de treino tem uma partida salva separadamente. Não há coleta de resultados nem comparação global entre jogadores. Para compartilhar, o ECO usa o recurso nativo do navegador ou copia o texto para a área de transferência.
