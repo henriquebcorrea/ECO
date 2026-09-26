@@ -1,132 +1,73 @@
 import "./styles.css";
 import {
-  chooseConnection,
   createRound,
-  createSemanticIndex,
-  getFeedback,
-  getGuessNode,
-  getNextSaoPauloMidnight,
-  getNode,
-  getPilotDay,
-  getSaoPauloDate,
+  getCurrentIndex,
+  getRevealedHint,
   isRoundState,
   MAX_GUESSES,
   restoreRound,
+  routeIsValid,
   submitGuess,
   type Puzzle,
-  type RoundMode,
   type RoundState,
-  type SemanticEdge,
-  type SemanticIndex,
-  type WordValidator,
-  type WordNode,
 } from "./game";
-import { getPuzzleForPilotDay, puzzles } from "./data/puzzles";
-import { loadSemanticEdges } from "./data/semantic";
+import { getPuzzleById, puzzles } from "./data/puzzles";
 import { loadPortugueseVocabulary, type PortugueseVocabulary } from "./data/vocabulary";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Elemento principal #app não encontrado.");
 
-const TODAY = getSaoPauloDate();
-const TODAY_INDEX = getPilotDay(TODAY);
-const selectionKey = "eco:selection";
+const selectionKey = "eco:sequence:selection:v1";
+const DEFAULT_PUZZLE_ID = puzzles[0].id;
 
-interface ChallengeSelection {
-  mode: RoundMode;
-  practiceDay: number;
-}
-
-function readSelection(): ChallengeSelection {
-  const queryDay = Number(new URLSearchParams(window.location.search).get("treino"));
-  if (Number.isInteger(queryDay) && queryDay >= 1 && queryDay <= 7) {
-    return { mode: "practice", practiceDay: queryDay - 1 };
-  }
+function readSelection(): string {
+  const requestedId = new URLSearchParams(window.location.search).get("rota");
+  if (requestedId && getPuzzleById(requestedId)) return requestedId;
   try {
-    const parsed = JSON.parse(localStorage.getItem(selectionKey) ?? "null") as Partial<ChallengeSelection> | null;
-    const stored = parsed ?? {};
-    const practiceDay = Number.isInteger(stored.practiceDay) && stored.practiceDay! >= 0 && stored.practiceDay! < 7
-      ? stored.practiceDay!
-      : 0;
-    if (stored?.mode === "practice") return { mode: "practice", practiceDay };
-    if (stored?.mode === "daily" && TODAY_INDEX !== null) return { mode: "daily", practiceDay };
-  } catch {
-    // O desafio diário continua acessível sem armazenamento local.
-  }
-  return TODAY_INDEX === null
-    ? { mode: "practice", practiceDay: 0 }
-    : { mode: "daily", practiceDay: 0 };
+    const storedId = localStorage.getItem(selectionKey);
+    if (storedId && getPuzzleById(storedId)) return storedId;
+  } catch { /* seleção apenas desta visita */ }
+  return DEFAULT_PUZZLE_ID;
 }
 
-let selection = readSelection();
-let activePuzzle = getPuzzleForPilotDay(selection.mode === "daily" ? TODAY_INDEX ?? 0 : selection.practiceDay)!;
-let activeRoundKey = getRoundKey(selection);
-let activeStorageKey = getStorageKey(selection);
-let semanticEdges: SemanticEdge[] = [];
-let semanticIndex: SemanticIndex = createSemanticIndex(activePuzzle, semanticEdges);
+let activePuzzle = getPuzzleById(readSelection())!;
+let state = createRound(activePuzzle.id);
 let vocabulary: PortugueseVocabulary | null = null;
 let vocabularyStatus: "loading" | "ready" | "failed" = "loading";
 let notice = "";
 let draftGuess = "";
-let state = createRound(activeRoundKey, selection.mode);
+let nextMapScrollBehavior: ScrollBehavior = "auto";
 
-function getRoundKey(value: ChallengeSelection): string {
-  return value.mode === "daily" ? `daily:${TODAY}` : `practice:${value.practiceDay + 1}`;
+function storageKey(puzzle: Puzzle): string {
+  return `eco:sequence:v1:${puzzle.id}`;
 }
 
-function getStorageKey(value: ChallengeSelection): string {
-  return value.mode === "daily" ? `eco:round:${TODAY}` : `eco:practice:${value.practiceDay + 1}`;
-}
-
-function readState(
-  selectedPuzzle: Puzzle,
-  roundKey: string,
-  storageKey: string,
-  mode: RoundMode,
-  validator: WordValidator,
-): RoundState {
+function readState(puzzle: Puzzle): RoundState {
   try {
-    const stored = localStorage.getItem(storageKey);
-    if (!stored) return createRound(roundKey, mode);
-    const parsed: unknown = JSON.parse(stored);
-    const restored = restoreRound(parsed, roundKey, mode, selectedPuzzle, validator);
-    if (restored) {
-      if (!isRoundState(parsed, roundKey, mode, selectedPuzzle)
-        || JSON.stringify(parsed) !== JSON.stringify(restored)) {
-        localStorage.setItem(storageKey, JSON.stringify(restored));
-      }
-      return restored;
+    const raw = localStorage.getItem(storageKey(puzzle));
+    if (!raw) return createRound(puzzle.id);
+    const parsed: unknown = JSON.parse(raw);
+    const restored = restoreRound(parsed, puzzle);
+    if (!restored) return createRound(puzzle.id);
+    if (!isRoundState(parsed, puzzle) || JSON.stringify(parsed) !== JSON.stringify(restored)) {
+      localStorage.setItem(storageKey(puzzle), JSON.stringify(restored));
     }
-  } catch {
-    // Uma falha de armazenamento não impede uma nova partida.
-  }
-  return createRound(roundKey, mode);
+    return restored;
+  } catch { return createRound(puzzle.id); }
 }
 
 function persistState(): void {
-  try {
-    localStorage.setItem(activeStorageKey, JSON.stringify(state));
-  } catch {
-    notice = "Não consegui salvar esta partida neste navegador.";
-  }
+  try { localStorage.setItem(storageKey(activePuzzle), JSON.stringify(state)); }
+  catch { notice = "Não consegui salvar esta partida neste navegador."; }
 }
 
 function persistSelection(): void {
-  try {
-    localStorage.setItem(selectionKey, JSON.stringify(selection));
-  } catch {
-    // O seletor continua funcionando durante esta visita.
-  }
+  try { localStorage.setItem(selectionKey, activePuzzle.id); } catch { /* funciona nesta visita */ }
   const url = new URL(window.location.href);
-  if (selection.mode === "practice") url.searchParams.set("treino", String(selection.practiceDay + 1));
-  else url.searchParams.delete("treino");
+  url.searchParams.delete("treino");
+  url.searchParams.delete("date");
+  url.searchParams.set("rota", activePuzzle.id);
   window.history.replaceState(null, "", url);
-}
-
-function scheduleDailyTurnover(): void {
-  const nextMidnight = getNextSaoPauloMidnight();
-  const delay = Math.max(1_000, nextMidnight.getTime() - Date.now() + 250);
-  window.setTimeout(() => window.location.reload(), delay);
 }
 
 function escapeHtml(value: string): string {
@@ -135,293 +76,149 @@ function escapeHtml(value: string): string {
   })[character]!);
 }
 
-function formatDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", timeZone: "UTC" })
-    .format(new Date(Date.UTC(year, month - 1, day, 12)));
+function getVisibleNodeLabel(puzzle: Puzzle, round: RoundState, index: number): string {
+  const node = puzzle.nodes[index];
+  if (index === 0 || index === puzzle.nodes.length - 1 || round.foundIndices.includes(index) || round.status === "lost") {
+    return node.label;
+  }
+  const currentIndex = getCurrentIndex(puzzle, round);
+  if (index === currentIndex && round.revealedLetters > 0) {
+    const prefix = getRevealedHint(puzzle, round);
+    const remaining = Math.max(0, Array.from(node.label).length - round.revealedLetters);
+    return prefix + (remaining ? ` ${Array.from({ length: remaining }, () => "·").join(" ")}` : "");
+  }
+  return "????";
 }
 
-function getTarget(selectedPuzzle: Puzzle): WordNode {
-  return getNode(selectedPuzzle, selectedPuzzle.targetId)!;
+function latestMapIndex(puzzle: Puzzle, round: RoundState): number {
+  const lastAttempt = round.attemptedWords.at(-1);
+  if (lastAttempt?.startsWith("route:")) {
+    const index = puzzle.nodes.findIndex((node) => `route:${node.id}` === lastAttempt);
+    if (index >= 0) return index;
+  }
+  return getCurrentIndex(puzzle, round) ?? puzzle.nodes.length - 1;
+}
+
+function renderRoute(puzzle: Puzzle, round: RoundState): string {
+  const currentIndex = getCurrentIndex(puzzle, round);
+  const latestIndex = latestMapIndex(puzzle, round);
+  const list = puzzle.nodes.map((_, index) => {
+    const isKnown = index === 0 || index === puzzle.nodes.length - 1
+      || round.foundIndices.includes(index) || round.status === "lost";
+    const isCurrent = index === currentIndex && round.status === "playing";
+    const isLatest = index === latestIndex;
+    const label = getVisibleNodeLabel(puzzle, round, index);
+    const stateLabel = index === 0 ? "INÍCIO" : index === puzzle.nodes.length - 1 ? "CHEGADA"
+      : isKnown ? "ENCONTRADA" : isCurrent ? "PRÓXIMO ELO" : `POSIÇÃO ${String(index + 1).padStart(2, "0")}`;
+    const nodeMarkup = `<li class="sequence-item ${index === 0 || index === puzzle.nodes.length - 1 ? "is-endpoint" : ""} ${isKnown ? "is-known" : "is-hidden"} ${isCurrent ? "is-current" : ""} ${isLatest ? "is-latest" : ""}" ${isLatest ? 'data-latest="true"' : ""} aria-label="Posição ${index + 1} de 10, ${isKnown ? escapeHtml(label) : stateLabel.toLocaleLowerCase("pt-BR")}">
+      <span class="sequence-marker" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
+      <div class="sequence-node"><span class="sequence-state">${stateLabel}</span><strong>${escapeHtml(label)}</strong></div>
+      ${index < puzzle.nodes.length - 1 ? (() => {
+        const nextIndex = index + 1;
+        const unlocked = round.status !== "playing" || (currentIndex !== null && index < currentIndex)
+          || (currentIndex !== null && index === currentIndex - 1);
+        const isActiveLink = currentIndex === nextIndex && round.status === "playing";
+        return `<div class="sequence-link ${unlocked ? "is-unlocked" : ""} ${isActiveLink ? "is-active" : ""}" aria-hidden="true"><i></i><span>${unlocked ? escapeHtml(puzzle.edges[index].label) : ""}</span></div>`;
+      })() : ""}
+    </li>`;
+    return nodeMarkup;
+  }).join("");
+  return `<div class="map-scroll" tabindex="0" aria-label="Mapa linear de dez posições; use as setas para navegar"><ol class="sequence-map">${list}</ol></div>`;
 }
 
 function renderChallengePicker(): string {
-  const dailyOption = TODAY_INDEX === null
-    ? ""
-    : `<option value="daily" ${selection.mode === "daily" ? "selected" : ""}>Diário · dia ${String(TODAY_INDEX + 1).padStart(2, "0")}</option>`;
-  const practiceOptions = puzzles.map((_, index) =>
-    `<option value="practice:${index}" ${selection.mode === "practice" && selection.practiceDay === index ? "selected" : ""}>Dia ${String(index + 1).padStart(2, "0")}</option>`,
-  ).join("");
-  return `<label class="sr-only" for="challenge-select">Escolher desafio ou dia de treino</label>
-    <select class="challenge-select" id="challenge-select" aria-label="Escolher desafio ou dia de treino">
-      ${dailyOption}<optgroup label="Treino · sete desafios">${practiceOptions}</optgroup>
+  return `<label class="sr-only" for="challenge-select">Escolher protótipo</label>
+    <select class="challenge-select" id="challenge-select" aria-label="Escolher protótipo">
+      ${puzzles.map((puzzle, index) => `<option value="${escapeHtml(puzzle.id)}" ${activePuzzle.id === puzzle.id ? "selected" : ""}>Protótipo ${index + 1} · ${escapeHtml(puzzle.title)}</option>`).join("")}
     </select>`;
 }
 
-function renderUpdatedGraph(selectedPuzzle: Puzzle, round: RoundState): string {
-  const rows = round.guesses.slice(0, -1).map((guess, index) => {
-    const next = round.guesses[index + 1];
-    const feedback = getFeedback(selectedPuzzle, getGuessNode(selectedPuzzle, guess), semanticIndex);
-    const relation = next.relationFromPrevious ?? feedback.nextStep?.relation ?? "leva a";
-    return "<li class=\"connection-row\"><span class=\"trail-word trail-origin\">" + escapeHtml(guess.label)
-      + "</span><span class=\"trail-link\"><span>" + escapeHtml(relation)
-      + "</span><b aria-hidden=\"true\">↓</b></span><span class=\"trail-word trail-destination\">"
-      + escapeHtml(next.label) + "</span></li>";
-  }).join("");
-
-  let connectionMarkup = rows;
-  if (round.activeStep) {
-    const step = round.activeStep;
-    const latest = round.status !== "solved";
-    const destination = round.status === "lost" ? step.answerLabel : step.isSecret ? "PALAVRA-CHAVE" : "????";
-    const ariaDestination = round.status === "lost" ? destination : "destino escondido";
-    connectionMarkup += "<li class=\"connection-row " + (latest ? "is-latest" : "") + "\" "
-      + (latest ? "data-latest=\"true\" " : "") + "aria-label=\"" + escapeHtml(step.fromLabel) + "; "
-      + escapeHtml(step.relation) + "; " + escapeHtml(ariaDestination) + "\">"
-      + "<span class=\"trail-word trail-origin\">" + escapeHtml(step.fromLabel) + "</span>"
-      + "<span class=\"trail-link\"><span>" + escapeHtml(step.relation) + "</span><b aria-hidden=\"true\">↓</b></span>"
-      + "<span class=\"trail-word " + (step.isSecret ? "trail-secret" : "trail-destination") + "\">"
-      + escapeHtml(destination) + "</span></li>";
-  }
+function renderClue(puzzle: Puzzle, round: RoundState): string {
   if (round.status === "solved") {
-    const target = getTarget(selectedPuzzle);
-    connectionMarkup += "<li class=\"connection-row is-keyword-found\" data-latest=\"true\"><span class=\"trail-word trail-origin\">"
-      + escapeHtml(target.label) + "</span><span class=\"trail-link\"><span>palavra-chave encontrada</span>"
-      + "<b aria-hidden=\"true\">✓</b></span><span class=\"trail-word trail-destination\">"
-      + escapeHtml(target.label) + "</span></li>";
+    return `<section class="clue-panel clue-complete" aria-live="polite"><span class="clue-icon" aria-hidden="true">✓</span><div><span class="clue-label">TRILHA COMPLETA</span><p>Você encontrou todos os elos. Boa leitura do caminho.</p></div></section>`;
   }
-
-  const unlinked = round.unlinked.map((guess, index) => {
-    const latest = !round.activeStep && round.status !== "solved" && index === round.unlinked.length - 1;
-    return "<li class=\"unlinked-word " + (latest ? "is-latest" : "") + "\" "
-      + (latest ? "data-latest=\"true\" " : "") + "><span class=\"trail-word\">"
-      + escapeHtml(guess.label) + "</span><span class=\"unlinked-label\">Sem elo conhecido nesta rota</span></li>";
-  }).join("");
-  const empty = round.guesses.length === 0 && round.unlinked.length === 0
-    ? "<div class=\"map-empty\"><span aria-hidden=\"true\">✳</span><p>Seu primeiro palpite abre uma trilha.</p><small>Acerte cada próximo elo para avançar.</small></div>"
-    : "";
-  return "<div class=\"graph-scroll\" tabindex=\"0\" aria-label=\"Mapa da trilha semântica; use as setas para navegar\"><div class=\"trail-content\">"
-    + (connectionMarkup ? "<section class=\"trail-area\" aria-labelledby=\"known-trail-title\"><h3 id=\"known-trail-title\">TRILHA CONFIRMADA</h3><ol class=\"connection-list\">"
-      + connectionMarkup + "</ol></section>" : "")
-    + (unlinked ? "<section class=\"unlinked-area\" aria-labelledby=\"unlinked-trail-title\"><h3 id=\"unlinked-trail-title\">PALPITES SEM ELO</h3><ul class=\"unlinked-list\">"
-      + unlinked + "</ul></section>" : "")
-    + empty + "</div></div>";
-}
-
-function renderGraph(selectedPuzzle: Puzzle, round: RoundState): string {
-  return renderUpdatedGraph(selectedPuzzle, round);
-}
-function renderUpdatedClue(selectedPuzzle: Puzzle, round: RoundState): string {
-  const step = round.activeStep;
-  if (!step && round.status === "lost") {
-    return "<section class=\"clue-panel clue-solved\" aria-label=\"Rodada encerrada\"><span class=\"clue-spark\" aria-hidden=\"true\">↗</span><p>A palavra-chave era <strong>"
-      + escapeHtml(getTarget(selectedPuzzle).label) + "</strong>. Tente outra rota no próximo desafio.</p></section>";
+  if (round.status === "lost") {
+    return `<section class="clue-panel clue-complete" aria-live="polite"><span class="clue-icon" aria-hidden="true">↗</span><div><span class="clue-label">SEQUÊNCIA REVELADA</span><p>O limite de ${MAX_GUESSES} palpites terminou. A rota inteira está no mapa.</p></div></section>`;
   }
-  if (!step) {
-    return "<section class=\"clue-panel clue-empty\" aria-label=\"Pistas\"><span class=\"clue-spark\" aria-hidden=\"true\">✳</span><p>Escolha uma palavra para abrir uma trilha. O destino do elo fica escondido.</p></section>";
-  }
-  if (round.status === "solved") {
-    return "<section class=\"clue-panel clue-solved\" aria-label=\"Pistas do último palpite\" aria-live=\"polite\"><span class=\"clue-spark\" aria-hidden=\"true\">✓</span><p>Você encontrou a palavra-chave. Agora escolha a conexão para abrir o caminho secreto.</p></section>";
-  }
-  const revealed = Array.from(step.answerLabel).slice(0, step.revealedLetters).join("");
-  const destination = round.status === "lost"
-    ? step.answerLabel
-    : step.revealedLetters > 0
-      ? revealed + " _".repeat(Math.max(0, Array.from(step.answerLabel).length - step.revealedLetters))
-      : "????";
-  const heading = step.isSecret ? "PALAVRA-CHAVE" : "PRÓXIMO ELO";
-  const message = round.status === "lost"
-    ? "O elo que faltou era " + step.answerLabel + "."
-    : "Erros válidos revelam uma letra · " + round.attemptCount + "/" + MAX_GUESSES + " palpites usados. Digite a palavra que completa a relação.";
-  return "<section class=\"clue-panel clue-active\" aria-label=\"Pistas do último palpite\" aria-live=\"polite\">"
-    + "<div class=\"clue-heading\"><span class=\"clue-kicker\">" + heading + "</span><strong>"
-    + escapeHtml(step.fromLabel) + "</strong></div><div class=\"clue-flow\"><span class=\"clue-relation\">"
-    + escapeHtml(step.relation) + "</span><span class=\"clue-flow-arrow\" aria-hidden=\"true\">↓</span>"
-    + "<strong class=\"clue-next " + (step.isSecret ? "is-secret" : "") + "\">" + escapeHtml(destination)
-    + "</strong></div><p class=\"clue-instruction\">" + escapeHtml(message) + "</p></section>";
-}
-
-function renderLatestClue(selectedPuzzle: Puzzle, round: RoundState): string {
-  return renderUpdatedClue(selectedPuzzle, round);
-}
-function renderUpdatedStatus(selectedPuzzle: Puzzle, round: RoundState): string {
-  if (round.status === "playing") return "";
-  const target = getTarget(selectedPuzzle);
-  const won = round.status === "solved";
-  return "<section class=\"finish-panel " + (won ? "finish-win" : "finish-loss") + "\" aria-live=\"polite\">"
-    + "<div class=\"finish-mark\" aria-hidden=\"true\">" + (won ? "✳" : "↗") + "</div><div><span class=\"clue-kicker\">"
-    + (won ? "VOCÊ ENCONTROU" : "FIM DAS TENTATIVAS") + "</span><h2>" + escapeHtml(target.label)
-    + "</h2><p>" + escapeHtml(selectedPuzzle.sense) + " · " + round.attemptCount + "/" + MAX_GUESSES
-    + " palpites</p></div></section>";
-}
-
-function renderStatus(selectedPuzzle: Puzzle, round: RoundState): string {
-  return renderUpdatedStatus(selectedPuzzle, round);
-}
-function renderConnectionQuiz(selectedPuzzle: Puzzle, round: RoundState): string {
-  if (round.status !== "solved") return "";
-  if (round.connectionChoice === null) {
-    return `<section class="connection-panel" aria-labelledby="connection-title">
-      <div class="section-label"><span>02</span><span>CAMINHO SECRETO</span></div>
-      <h2 id="connection-title">${escapeHtml(selectedPuzzle.connectionQuestion)}</h2>
-      <p>Uma escolha. A resposta certa abre outra trilha.</p>
-      <div class="connection-options">${selectedPuzzle.connectionOptions.map((option) =>
-        `<button class="connection-option" type="button" data-option="${escapeHtml(option.id)}"><span>${escapeHtml(option.label)}</span><b aria-hidden="true">↗</b></button>`,
-      ).join("")}</div>
-    </section>`;
-  }
-
-  const correct = round.routeUnlocked;
-  const correctOption = selectedPuzzle.connectionOptions.find((option) => option.id === selectedPuzzle.correctConnectionId)!;
-  const path = correct
-    ? `<div class="secret-route" aria-label="Caminho secreto desbloqueado">${selectedPuzzle.secretRoute.map((id, index) => {
-        const node = getNode(selectedPuzzle, id)!;
-        return `${index ? `<span class="route-arrow" aria-hidden="true">→</span>` : ""}<span class="route-node">${escapeHtml(node.label)}</span>`;
-      }).join("")}</div>`
-    : `<p class="route-locked-copy">A resposta que abria a trilha era <strong>${escapeHtml(correctOption.label)}</strong>. O caminho secreto fica para outra rodada.</p>`;
-  return `<section class="connection-panel connection-result ${correct ? "is-unlocked" : "is-locked"}" aria-live="polite">
-    <div class="section-label"><span>02</span><span>CAMINHO SECRETO</span></div>
-    <h2>${correct ? "Trilha desbloqueada." : "Essa conexão ficou pelo caminho."}</h2>
-    ${path}
+  const currentIndex = getCurrentIndex(puzzle, round)!;
+  const previous = puzzle.nodes[currentIndex - 1];
+  const relation = puzzle.edges[currentIndex - 1].label;
+  const hint = getRevealedHint(puzzle, round);
+  const target = puzzle.nodes[currentIndex];
+  const remaining = Math.max(0, Array.from(target.label).length - round.revealedLetters);
+  const displayHint = round.revealedLetters
+    ? `${hint}${remaining ? ` ${Array.from({ length: remaining }, () => "·").join(" ")}` : ""}`
+    : "????";
+  return `<section class="clue-panel" aria-live="polite" aria-label="Pista da posição ${currentIndex + 1}">
+    <div class="clue-heading"><span class="clue-label">PRÓXIMO ELO · POSIÇÃO ${String(currentIndex + 1).padStart(2, "0")}</span><strong>${escapeHtml(previous.label)}</strong></div>
+    <div class="clue-equation"><span class="clue-relation">${escapeHtml(relation)}</span><span aria-hidden="true">↓</span><strong>${escapeHtml(displayHint)}</strong></div>
+    <p class="clue-help">${round.revealedLetters ? "A letra revelada ajuda a encontrar o próximo elo." : "Descubra a palavra que completa esta relação."}</p>
   </section>`;
 }
 
-function activeDayNumber(): number {
-  return selection.mode === "daily" ? (TODAY_INDEX ?? 0) + 1 : selection.practiceDay + 1;
-}
-
-function shareText(round: RoundState): string {
-  if (round.status !== "playing") {
-    const day = activeDayNumber();
-    const trail = round.guesses.map((guess) => guess.label).join(" → ");
-    const url = new URL(window.location.href);
-    if (selection.mode === "practice") url.searchParams.set("treino", String(day));
-    else url.searchParams.delete("treino");
-    const mode = selection.mode === "practice" ? "treino" : "desafio diário";
-    const result = round.status === "solved"
-      ? "Resolvi em " + round.attemptCount + "/" + MAX_GUESSES + " palpites"
-      : "A palavra-chave era " + getTarget(activePuzzle).label + " · " + round.attemptCount + "/" + MAX_GUESSES;
-    return "ECO · " + mode + " " + day + "/7\n" + result + "\n" + trail + "\n\nJogue: " + url.href;
-  }
-  const day = activeDayNumber();
-  const trail = round.guesses.map((guess) => guess.label).join(" → ");
-  const outcome = `Resolvi em ${round.guesses.length} ${round.guesses.length === 1 ? "palpite" : "palpites"}`;
+function shareText(): string {
+  const routeNumber = puzzles.findIndex((puzzle) => puzzle.id === activePuzzle.id) + 1;
+  const result = state.status === "solved"
+    ? `Completei em ${state.attemptCount}/${MAX_GUESSES} palpites.`
+    : `Cheguei a ${state.foundIndices.length}/8 elos em ${state.attemptCount}/${MAX_GUESSES} palpites.`;
   const url = new URL(window.location.href);
-  if (selection.mode === "practice") url.searchParams.set("treino", String(day));
-  else url.searchParams.delete("treino");
-  const mode = selection.mode === "practice" ? "treino" : "desafio diário";
-  return `ECO · ${mode} ${day}/7\n${outcome}\n${trail}\n\nJogue: ${url.href}`;
+  url.searchParams.delete("treino");
+  url.searchParams.delete("date");
+  url.searchParams.set("rota", activePuzzle.id);
+  return `ECO · Protótipo ${routeNumber}\n${result}\n🟩 ${state.foundIndices.length} elos encontrados\n\nJogue: ${url.href}`;
 }
 
 function render(): void {
-  const day = activeDayNumber();
-  const used = state.attemptCount;
-  const mapCount = state.guesses.length + state.unlinked.length;
   const isPlaying = state.status === "playing";
-  const newestGuess = state.guesses.at(-1) ?? state.unlinked.at(-1);
-  const inputDisabled = vocabularyStatus !== "ready";
+  const start = activePuzzle.nodes[0];
+  const end = activePuzzle.nodes[activePuzzle.nodes.length - 1];
+  const inputDisabled = vocabularyStatus !== "ready" || !isPlaying;
 
   app!.innerHTML = `<main class="page-shell">
-    <header class="topbar">
-      <a class="wordmark" href="/" aria-label="ECO início">ECO<span>.</span></a>
-      <div class="topbar-meta">${renderChallengePicker()}</div>
-    </header>
-
+    <header class="topbar"><a class="wordmark" href="/" aria-label="ECO início">ECO<span>.</span></a><div class="topbar-meta">${renderChallengePicker()}</div></header>
     <div class="game-layout">
       <section class="game-panel" aria-label="Partida">
-        <section class="intro-row">
-          <div><span class="eyebrow">${selection.mode === "daily" ? `${escapeHtml(formatDate(TODAY))} · DESAFIO DIÁRIO` : `TREINO ${String(day).padStart(2, "0")} · ${escapeHtml(formatDate(activePuzzle.date))}`}</span><h1>Uma palavra. <em>Vários caminhos.</em></h1></div>
-          <details class="how-to"><summary>Como jogar <span aria-hidden="true">＋</span></summary><div class="how-to-copy"><p>Digite uma palavra do vocabulário português. O mapa revela o próximo elo conhecido e a relação entre as palavras; algumas palavras válidas não têm rota registrada.</p><p>Use uma palavra por palpite. As tentativas são ilimitadas. Ao encontrar a resposta, escolha a conexão que abre o caminho secreto.</p></div></details>
+        <section class="intro-row"><div><span class="eyebrow">DOIS PROTÓTIPOS · SEQUÊNCIAS FIXAS</span><h1>Encontre cada elo.<br><em>Complete o caminho.</em></h1></div>
+          <details class="how-to"><summary>Como jogar <span aria-hidden="true">＋</span></summary><div class="how-to-copy"><p>O mapa tem dez posições: início e chegada ficam visíveis. Descubra os oito elos entre elas, seguindo a relação que aparece para a lacuna atual.</p><p>Qualquer palavra aceita pelo dicionário vale como tentativa. Um erro revela uma letra; se acertar uma palavra futura, ela fica marcada e você continua pela primeira lacuna. Há ${MAX_GUESSES} palpites por percurso.</p></div></details>
         </section>
-
-        <section class="target-strip" aria-label="Palavra secreta e palpites">
-          <div class="target-copy"><span class="target-label">${selection.mode === "daily" ? "A PALAVRA DE HOJE" : `PALAVRA DO TREINO ${String(day).padStart(2, "0")}`}</span><strong>${isPlaying ? "?????" : escapeHtml(getTarget(activePuzzle).label)}</strong><span class="target-sense">${isPlaying ? "escute os ecos" : escapeHtml(getTarget(activePuzzle).category)}</span></div>
-          <div class="attempts-box"><div class="attempts-heading"><span>PALPITES</span><strong>${used}</strong></div><div class="attempt-dots" aria-label="${used} palpites feitos">${used === 0 ? `<span class="attempt-empty">sem limite</span>` : `<span class="attempt-used">${used} ${used === 1 ? "palpite" : "palpites"}</span>`}</div><small>tentativas ilimitadas</small></div>
+        <section class="target-strip" aria-label="Início, destino e palpites">
+          <div class="endpoint"><span>INÍCIO</span><strong>${escapeHtml(start.label)}</strong></div><span class="endpoint-arrow" aria-hidden="true">→</span>
+          <div class="endpoint endpoint-arrival"><span>CHEGADA</span><strong>${escapeHtml(end.label)}</strong></div>
+          <div class="attempts-box"><span class="attempt-label">PALPITES</span><strong>${state.attemptCount}<i>/${MAX_GUESSES}</i></strong><small>${activePuzzle.nodes.length - 2 - state.foundIndices.length} elos restantes</small></div>
         </section>
-
         ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ""}
         ${vocabularyStatus === "loading" ? `<p class="vocabulary-status" role="status">Carregando o vocabulário português offline…</p>` : ""}
         ${vocabularyStatus === "failed" ? `<p class="vocabulary-status vocabulary-error" role="alert">Não consegui carregar o vocabulário offline. Recarregue a página para tentar novamente.</p>` : ""}
-        ${renderLatestClue(activePuzzle, state)}
-
-        ${isPlaying ? `<form class="guess-form" id="guess-form" autocomplete="off">
-          <label class="input-label" for="guess-input">Digite uma palavra em português</label>
-          <div class="input-row"><div class="input-wrap"><span class="input-mark" aria-hidden="true">↳</span><input id="guess-input" name="guess" type="text" value="${escapeHtml(draftGuess)}" placeholder="Uma palavra…" aria-describedby="input-help" autocomplete="off" autocapitalize="none" spellcheck="false" ${inputDisabled ? "disabled" : ""} required /><button class="clear-input" type="button" aria-label="Limpar palavra" ${inputDisabled ? "disabled" : ""}>×</button></div><button class="submit-button" type="submit" ${inputDisabled ? "disabled" : ""}>ECOAR <span aria-hidden="true">↗</span></button></div>
-          <div class="input-foot"><span id="input-help">Uma palavra por palpite. Sem limite de tentativas.</span><span>pt-BR</span></div>
-        </form>` : ""}
-
-        ${renderStatus(activePuzzle, state)}
-        ${renderConnectionQuiz(activePuzzle, state)}
-        ${!isPlaying ? `<section class="result-share"><div><span class="clue-kicker">SEU CAMINHO</span><p>Você encontrou ${escapeHtml(getTarget(activePuzzle).label)} em ${used} ${used === 1 ? "palpite" : "palpites"}.</p></div><button class="share-button" id="share-button" type="button"><span aria-hidden="true">↗</span> Compartilhar resultado</button></section>` : ""}
+        ${renderClue(activePuzzle, state)}
+        ${isPlaying ? `<form class="guess-form" id="guess-form" autocomplete="off"><label class="input-label" for="guess-input">DIGITE O PRÓXIMO ELO</label><div class="input-row"><div class="input-wrap"><span aria-hidden="true">↳</span><input id="guess-input" name="guess" type="text" value="${escapeHtml(draftGuess)}" placeholder="Uma palavra…" aria-describedby="input-help" autocomplete="off" autocapitalize="none" spellcheck="false" ${inputDisabled ? "disabled" : ""} required /><button class="clear-input" type="button" aria-label="Limpar palavra" ${inputDisabled ? "disabled" : ""}>×</button></div><button class="submit-button" type="submit" ${inputDisabled ? "disabled" : ""}>TENTAR <span aria-hidden="true">↗</span></button></div><div class="input-foot"><span id="input-help">Uma palavra do português por palpite</span><span>RESTAM ${Math.max(0, MAX_GUESSES - state.attemptCount)}</span></div></form>` : ""}
+        ${!isPlaying ? `<section class="finish-panel ${state.status === "solved" ? "finish-win" : "finish-loss"}" aria-live="polite"><span class="finish-mark" aria-hidden="true">${state.status === "solved" ? "✳" : "↗"}</span><div><span class="clue-label">${state.status === "solved" ? "CAMINHO COMPLETO" : "LIMITE DE PALPITES"}</span><h2>${state.status === "solved" ? "Você encontrou a sequência." : "A sequência está revelada."}</h2><p>${state.attemptCount} de ${MAX_GUESSES} palpites usados.</p></div></section>
+          <section class="result-actions"><button class="share-button" id="share-button" type="button">↗ Compartilhar resultado</button><button class="restart-button" id="restart-button" type="button">Reiniciar percurso</button></section>` : ""}
       </section>
-
-      <section class="map-section" aria-labelledby="map-title">
-        <div class="map-heading"><div><div class="section-label"><span>01</span><span>SEU MAPA</span></div><h2 id="map-title">Cada palpite deixa um eco.</h2></div><span class="map-count">${used} ${used === 1 ? "palavra" : "palavras"}</span></div>
-        <div class="map-card">${renderGraph(activePuzzle, state)}<div class="map-legend"><span><i class="legend-node"></i>palpite</span><span><i class="legend-link"></i>elo e relação</span><span><i class="legend-unlinked"></i>sem elo</span></div></div>
-        <p class="data-credit">Relações: <a href="https://conceptnet.io/" target="_blank" rel="noreferrer">ConceptNet 5.7</a> · CC BY-SA 4.0 · <a href="${import.meta.env.BASE_URL}licenses/third-party-notices.txt" target="_blank" rel="noreferrer">dicionário VERO e licenças</a></p>
+      <section class="map-section" aria-labelledby="map-title"><div class="map-heading"><div><div class="section-label"><span>01</span><span>TRILHA</span></div><h2 id="map-title">Dez posições, um caminho.</h2></div><span class="map-count">${state.foundIndices.length}/8 elos</span></div>
+        <div class="map-card">${renderRoute(activePuzzle, state)}<div class="map-legend"><span><i class="legend-found"></i>encontrada</span><span><i class="legend-hidden"></i>a descobrir</span></div></div>
+        <p class="data-credit">Vocabulário offline: <a href="${import.meta.env.BASE_URL}licenses/third-party-notices.txt" target="_blank" rel="noreferrer">VERO / Hunspell e licenças</a></p>
       </section>
     </div>
-
-    <footer class="page-footer"><span>Seu progresso fica salvo neste navegador.</span><span>${newestGuess ? `${used} ${used === 1 ? "palavra" : "palavras"} no mapa` : "Um jogo sem pressa, sem conta e sem barulho."}</span></footer>
+    <footer class="page-footer"><span>Seu progresso fica salvo neste navegador.</span><span>Partidas independentes · sem virada diária</span></footer>
   </main>`;
-
-  const mapCountElement = app!.querySelector<HTMLElement>(".map-count");
-  if (mapCountElement) mapCountElement.textContent = mapCount + (mapCount === 1 ? " palavra" : " palavras");
-  const mapTitle = app!.querySelector<HTMLElement>("#map-title");
-  if (mapTitle) mapTitle.textContent = "Cada elo confirmado abre caminho.";
-  const mapLegendNode = app!.querySelector<HTMLElement>(".map-legend span:first-child");
-  if (mapLegendNode) mapLegendNode.lastChild!.textContent = "palavra confirmada";
-  const attemptCountElement = app!.querySelector<HTMLElement>(".attempts-heading strong");
-  if (attemptCountElement) attemptCountElement.textContent = used + "/" + MAX_GUESSES;
-  const attemptLabel = app!.querySelector<HTMLElement>(".attempt-dots");
-  if (attemptLabel) {
-    attemptLabel.textContent = used === 0 ? MAX_GUESSES + " palpites disponíveis" : used + "/" + MAX_GUESSES + " usados";
-    attemptLabel.setAttribute("aria-label", used + " de " + MAX_GUESSES + " palpites usados");
-  }
-  const attemptHelp = app!.querySelector<HTMLElement>(".attempts-box small");
-  if (attemptHelp) attemptHelp.textContent = "erros revelam letras";
-  const targetHint = app!.querySelector<HTMLElement>(".target-sense");
-  if (targetHint && isPlaying) targetHint.textContent = "palavra-chave em segredo";
-  const inputHelp = app!.querySelector<HTMLElement>("#input-help");
-  if (inputHelp) inputHelp.textContent = "Cada erro válido revela uma letra. Máximo de " + MAX_GUESSES + " palpites.";
-  const helpCopy = app!.querySelector<HTMLElement>(".how-to-copy");
-  if (helpCopy) helpCopy.innerHTML = "<p>Digite uma palavra válida para iniciar uma rota. Depois, descubra o próximo elo escondido pela relação indicada; a palavra não aparece no mapa.</p><p>Erros válidos revelam uma letra. Você tem até "
-    + MAX_GUESSES + " palpites para alcançar a palavra-chave. Palavras repetidas ou fora do dicionário não contam.</p>";
-  const resultCopy = app!.querySelector<HTMLElement>(".result-share p");
-  if (resultCopy && state.status === "lost") {
-    resultCopy.textContent = "As tentativas acabaram. A palavra-chave era " + getTarget(activePuzzle).label + ".";
-  }
-  const footerMapCount = app!.querySelector<HTMLElement>(".page-footer span:last-child");
-  if (footerMapCount && mapCount > 0) footerMapCount.textContent = mapCount + (mapCount === 1 ? " palavra no mapa" : " palavras no mapa");
 
   bindChallengePicker();
   bindGuessForm();
-  bindConnectionOptions();
   bindShareButton();
-  bindGraphScroll();
-  const scrollBehavior = nextMapScrollBehavior;
+  bindRestartButton();
+  bindMapKeyboard();
+  const behavior = nextMapScrollBehavior;
   nextMapScrollBehavior = "auto";
-  window.requestAnimationFrame(() => scrollMapToLatest(scrollBehavior));
+  window.requestAnimationFrame(() => scrollMapToLatest(behavior));
 }
 
-function switchChallenge(value: string): void {
-  if (value === "daily" && TODAY_INDEX !== null) {
-    selection = { ...selection, mode: "daily" };
-  } else if (value.startsWith("practice:")) {
-    const day = Number(value.slice("practice:".length));
-    if (!Number.isInteger(day) || day < 0 || day >= puzzles.length) return;
-    selection = { mode: "practice", practiceDay: day };
-  } else return;
-
-  activePuzzle = getPuzzleForPilotDay(selection.mode === "daily" ? TODAY_INDEX! : selection.practiceDay)!;
-  activeRoundKey = getRoundKey(selection);
-  activeStorageKey = getStorageKey(selection);
-  semanticIndex = createActiveSemanticIndex();
-  state = vocabulary
-    ? readState(activePuzzle, activeRoundKey, activeStorageKey, selection.mode, vocabulary.isValidGuess)
-    : createRound(activeRoundKey, selection.mode);
-  notice = "";
+function switchChallenge(id: string): void {
+  const next = getPuzzleById(id);
+  if (!next || next.id === activePuzzle.id) return;
+  activePuzzle = next;
+  state = readState(activePuzzle);
   draftGuess = "";
+  notice = "";
   persistSelection();
   render();
 }
@@ -445,97 +242,42 @@ function bindGuessForm(): void {
       render();
       return;
     }
-    const result = submitGuess(activePuzzle, state, input.value, semanticIndex, vocabulary.isValidGuess);
-    if (result.kind === "empty") {
-      notice = "Digite uma palavra para ecoar.";
+    const result = submitGuess(activePuzzle, state, input.value, vocabulary.isValidGuess);
+    if (result.kind === "accepted") {
+      state = result.state;
+      persistState();
+      notice = result.outcome === "wrong"
+        ? "Ainda não é essa palavra. Uma letra do elo atual foi revelada."
+        : result.outcome === "correct"
+          ? result.foundIndex !== undefined && getCurrentIndex(activePuzzle, state) !== null
+            && result.foundIndex > getCurrentIndex(activePuzzle, state)!
+            ? "Essa posição futura foi encontrada. Continue pela primeira lacuna."
+            : "Elo encontrado. Siga a próxima relação."
+          : result.outcome === "solved"
+            ? "Você completou as oito posições intermediárias!"
+            : "O limite de 24 palpites terminou. Veja a sequência completa no mapa.";
+      draftGuess = "";
+      nextMapScrollBehavior = "smooth";
+    } else if (result.kind === "empty") notice = "Digite uma palavra para tentar.";
+    else if (result.kind === "invalid") notice = "Essa palavra não foi reconhecida no dicionário pt-BR. Confira a grafia e tente uma palavra só.";
+    else if (result.kind === "duplicate") notice = "Essa palavra já foi usada neste percurso. Tente outra.";
+    else if (result.kind === "endpoint") notice = "O início e a chegada já estão visíveis; tente descobrir um dos elos entre eles.";
+    else if (result.kind === "finished") {
       render();
-      document.querySelector<HTMLInputElement>("#guess-input")?.focus();
       return;
     }
-    if (result.kind === "invalid") {
-      notice = "Essa palavra não está no dicionário pt-BR. Confira a grafia e tente uma palavra só.";
-      render();
-      document.querySelector<HTMLInputElement>("#guess-input")?.focus();
-      return;
-    }
-    if (result.kind === "duplicate") {
-      notice = `“${result.guess.label}” já deixou um eco. Digite outra palavra.`;
-      render();
-      document.querySelector<HTMLInputElement>("#guess-input")?.focus();
-      return;
-    }
-    if (result.kind === "finished") return;
-    state = result.state;
-    draftGuess = "";
-    notice = result.outcome === "wrong"
-      ? "Essa não. Uma letra do elo escondido foi revelada."
-      : result.outcome === "advanced"
-        ? "Elo confirmado. Descubra a próxima palavra."
-        : result.outcome === "started"
-          ? "A trilha começou. Descubra o próximo elo."
-          : result.outcome === "unlinked"
-            ? "Essa palavra não tem elo conhecido. Tente outra para abrir a trilha."
-            : result.outcome === "lost"
-              ? "Suas 12 tentativas acabaram."
-              : result.outcome === "solved"
-                ? "Você encontrou a palavra-chave."
-                : "";
-    persistState();
-    nextMapScrollBehavior = "smooth";
     render();
-    if (state.status === "playing") document.querySelector<HTMLInputElement>("#guess-input")?.focus();
+    document.querySelector<HTMLInputElement>("#guess-input")?.focus();
   });
   document.querySelector<HTMLButtonElement>(".clear-input")?.addEventListener("click", () => {
     draftGuess = "";
-    input.value = "";
-    input.focus();
-  });
-}
-
-function bindConnectionOptions(): void {
-  document.querySelectorAll<HTMLButtonElement>("[data-option]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const optionId = button.dataset.option;
-      if (!optionId) return;
-      state = chooseConnection(activePuzzle, state, optionId);
-      persistState();
-      render();
-    });
-  });
-}
-
-async function bindShareButton(): Promise<void> {
-  const button = document.querySelector<HTMLButtonElement>("#share-button");
-  if (!button) return;
-  button.addEventListener("click", async () => {
-    const text = shareText(state);
-    const data = { title: "ECO — seu caminho", text };
-    try {
-      if (navigator.share && (!navigator.canShare || navigator.canShare(data))) {
-        try {
-          await navigator.share(data);
-          return;
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "AbortError") return;
-        }
-      }
-      await copyText(text);
-      button.innerHTML = "<span aria-hidden=\"true\">✓</span> Copiado";
-      window.setTimeout(() => {
-        if (document.body.contains(button)) button.innerHTML = "<span aria-hidden=\"true\">↗</span> Compartilhar resultado";
-      }, 2200);
-    } catch {
-      notice = "Não consegui compartilhar agora. Selecione e copie o caminho acima.";
-      render();
-    }
+    const currentInput = document.querySelector<HTMLInputElement>("#guess-input");
+    if (currentInput) { currentInput.value = ""; currentInput.focus(); }
   });
 }
 
 async function copyText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
+  if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.setAttribute("readonly", "");
@@ -548,84 +290,74 @@ async function copyText(text: string): Promise<void> {
   if (!copied) throw new Error("O navegador não permitiu copiar o resultado.");
 }
 
-function bindGraphScroll(): void {
-  const graph = document.querySelector<HTMLDivElement>(".graph-scroll");
-  if (!graph) return;
-  graph.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown") graph.scrollBy({ top: 100, behavior: "smooth" });
-    if (event.key === "ArrowUp") graph.scrollBy({ top: -100, behavior: "smooth" });
+function bindShareButton(): void {
+  const button = document.querySelector<HTMLButtonElement>("#share-button");
+  button?.addEventListener("click", async () => {
+    const text = shareText();
+    const data = { title: "ECO — seu caminho", text };
+    try {
+      if (navigator.share && (!navigator.canShare || navigator.canShare(data))) {
+        try { await navigator.share(data); return; }
+        catch (error) { if (error instanceof DOMException && error.name === "AbortError") return; }
+      }
+      await copyText(text);
+      button.textContent = "✓ Resultado copiado";
+      window.setTimeout(() => { if (document.body.contains(button)) button.textContent = "↗ Compartilhar resultado"; }, 2200);
+    } catch {
+      notice = "Não consegui compartilhar agora. Tente novamente.";
+      render();
+    }
   });
 }
 
-let nextMapScrollBehavior: ScrollBehavior = "auto";
-
-function scrollMapToLatest(behavior: ScrollBehavior): void {
-  const graph = document.querySelector<HTMLDivElement>(".graph-scroll");
-  const latest = graph?.querySelector<HTMLElement>("[data-latest='true']");
-  if (!graph || !latest) return;
-  const graphRect = graph.getBoundingClientRect();
-  const latestRect = latest.getBoundingClientRect();
-  const centeredTop = graph.scrollTop + latestRect.top - graphRect.top
-    - Math.max(14, (graph.clientHeight - latest.offsetHeight) / 2);
-  graph.scrollTo({ top: Math.max(0, centeredTop), behavior });
+function bindRestartButton(): void {
+  document.querySelector<HTMLButtonElement>("#restart-button")?.addEventListener("click", () => {
+    state = createRound(activePuzzle.id);
+    draftGuess = "";
+    notice = "Percurso reiniciado.";
+    persistState();
+    render();
+    document.querySelector<HTMLInputElement>("#guess-input")?.focus();
+  });
 }
 
-function createActiveSemanticIndex(): SemanticIndex {
-  return createSemanticIndex(
-    activePuzzle,
-    semanticEdges,
-    (term) => vocabulary?.resolveGraphTerm(term, activePuzzle) ?? null,
-  );
+function bindMapKeyboard(): void {
+  const map = document.querySelector<HTMLDivElement>(".map-scroll");
+  map?.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") map.scrollBy({ top: 90, behavior: "smooth" });
+    if (event.key === "ArrowUp") map.scrollBy({ top: -90, behavior: "smooth" });
+  });
+}
+
+function scrollMapToLatest(behavior: ScrollBehavior): void {
+  const map = document.querySelector<HTMLDivElement>(".map-scroll");
+  const latest = map?.querySelector<HTMLElement>("[data-latest='true']");
+  if (!map || !latest) return;
+  const mapRect = map.getBoundingClientRect();
+  const latestRect = latest.getBoundingClientRect();
+  const centeredTop = map.scrollTop + latestRect.top - mapRect.top
+    - Math.max(12, (map.clientHeight - latest.offsetHeight) / 2);
+  map.scrollTo({ top: Math.max(0, centeredTop), behavior });
 }
 
 function validatePuzzleData(): void {
-  if (import.meta.env.DEV) {
-    const ids = new Set<string>();
-    for (const item of puzzles) {
-      for (const word of item.nodes) {
-        if (ids.has(`${item.date}:${word.id}`)) throw new Error(`ID de palavra duplicado: ${item.date}/${word.id}`);
-        ids.add(`${item.date}:${word.id}`);
-      }
-      for (const edge of item.edges) {
-        if (!getNode(item, edge.from) || !getNode(item, edge.to)) throw new Error(`Aresta sem nó em ${item.date}: ${edge.from} → ${edge.to}`);
-      }
-      const index = createSemanticIndex(item, semanticEdges);
-      for (const id of item.secretRoute.slice(0, -1)) {
-        if (!getFeedback(item, getNode(item, id)!, index).nextStep) {
-          throw new Error(`Elo sem caminho até a resposta: ${item.date}/${id}`);
-        }
-      }
-      for (let routeIndex = 1; routeIndex < item.secretRoute.length; routeIndex += 1) {
-        const left = item.secretRoute[routeIndex - 1];
-        const right = item.secretRoute[routeIndex];
-        if (!item.edges.some((edge) => edge.from === left && edge.to === right || edge.from === right && edge.to === left)) {
-          throw new Error(`Rota secreta sem conexão direta: ${item.date}/${left}/${right}`);
-        }
-      }
-      if (item.connectionOptions.length !== 4 || !item.connectionOptions.some((option) => option.id === item.correctConnectionId)) {
-        throw new Error(`Pergunta de conexão inválida: ${item.date}`);
-      }
-    }
+  if (puzzles.length !== 2) throw new Error("O ECO deve oferecer exatamente dois protótipos.");
+  for (const puzzle of puzzles) {
+    if (!routeIsValid(puzzle)) throw new Error(`Rota inválida: ${puzzle.id}`);
+    const intermediates = puzzle.nodes.slice(1, -1);
+    if (intermediates.length !== 8) throw new Error(`A rota ${puzzle.id} precisa ter oito lacunas.`);
   }
 }
 
 validatePuzzleData();
+persistSelection();
+state = readState(activePuzzle);
 render();
-void loadPortugueseVocabulary().then((loadedVocabulary) => {
-  vocabulary = loadedVocabulary;
+void loadPortugueseVocabulary().then((loaded) => {
+  vocabulary = loaded;
   vocabularyStatus = "ready";
-  state = readState(activePuzzle, activeRoundKey, activeStorageKey, selection.mode, loadedVocabulary.isValidGuess);
-  semanticIndex = createActiveSemanticIndex();
-  render();
-  return loadSemanticEdges();
-}).then((loadedEdges) => {
-  if (loadedEdges.length === 0) return;
-  semanticEdges = loadedEdges;
-  semanticIndex = createActiveSemanticIndex();
   render();
 }).catch(() => {
   vocabularyStatus = "failed";
-  notice = "";
   render();
 });
-scheduleDailyTurnover();

@@ -39,6 +39,6 @@ describe("dicionário pt-BR offline", () => {
     expect(isValidPortugueseWord("a-histórico", puzzles[0], metadata, check)).toBe(true);
     expect(isValidPortugueseWord("guarda-chuva", puzzles[0], metadata, check)).toBe(false);
     expect(isValidPortugueseWord("guarda-sol", puzzles[0], metadata, check)).toBe(false);
-    expect(isValidPortugueseWord("Marte", puzzles[0], metadata, check)).toBe(true);
+    expect(isValidPortugueseWord("Pão", puzzles[0], metadata, check)).toBe(true);
   });
 });

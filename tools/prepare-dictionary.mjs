@@ -89,8 +89,6 @@ await Promise.all([
     "",
     "Hunspell WebAssembly (hunspell-wasm). Licença: LGPL-2.0 OU GPL-2.0 OU MPL-1.1.",
     "Fonte: https://github.com/rotemdan/hunspell-wasm",
-    "",
-    "ConceptNet 5.7.0. Dados sob CC BY-SA 4.0. Fonte: https://conceptnet.io/",
   ].join("\n"), "utf8"),
 ]);
 

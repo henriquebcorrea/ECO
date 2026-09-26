@@ -9,7 +9,6 @@
     "prebuild": "node tools/prepare-dictionary.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "prepare:conceptnet": "node tools/prepare-conceptnet.mjs",
     "prepare:dictionary": "node tools/prepare-dictionary.mjs",
     "test": "vitest run"
   },

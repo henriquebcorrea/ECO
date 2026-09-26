@@ -8,7 +8,6 @@ export interface VocabularyMetadata {
 
 export interface PortugueseVocabulary {
   isValidGuess(value: string, puzzle: Puzzle): boolean;
-  resolveGraphTerm(value: string, puzzle: Puzzle): string | null;
   dispose(): void;
 }
 
@@ -62,44 +61,11 @@ export async function loadPortugueseVocabulary(): Promise<PortugueseVocabulary> 
     }>;
   };
   const spell = await wrapper.createHunspellFromStrings(affixes, dictionary);
-  const properNames = new Set(metadata.properNames);
-  const accentVariants = new Map(metadata.accentVariants);
-  const resolvedCache = new Map<string, string | null>();
-  const puzzleCache = new WeakMap<Puzzle, Map<string, string>>();
-
-  const resolveGraphTerm = (value: string, puzzle: Puzzle): string | null => {
-    const key = normalizeWord(value);
-    const knownTerms = puzzleCache.get(puzzle) ?? puzzleTerms(puzzle);
-    puzzleCache.set(puzzle, knownTerms);
-    const known = knownTerms.get(key);
-    if (known) return known;
-
-    const cacheKey = value.toLocaleLowerCase("pt-BR");
-    if (resolvedCache.has(cacheKey)) return resolvedCache.get(cacheKey)!;
-    const raw = value.trim().toLocaleLowerCase("pt-BR").normalize("NFC");
-    if (!isSingleWord(raw) || properNames.has(key)) {
-      resolvedCache.set(cacheKey, null);
-      return null;
-    }
-
-    if (spell.testSpelling(raw)) {
-      resolvedCache.set(cacheKey, raw);
-      return raw;
-    }
-
-    const variants = accentVariants.get(key) ?? [];
-    const validVariants = variants.filter((variant) => spell.testSpelling(variant));
-    const uniqueVariants = [...new Set(validVariants)];
-    const display = uniqueVariants.length === 1 ? uniqueVariants[0] : null;
-    resolvedCache.set(cacheKey, display);
-    return display;
-  };
 
   return {
     isValidGuess(value, puzzle) {
       return isValidPortugueseWord(value, puzzle, metadata, (word) => spell.testSpelling(word));
     },
-    resolveGraphTerm,
     dispose() {
       spell.dispose();
     },
