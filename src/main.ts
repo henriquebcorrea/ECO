@@ -2,9 +2,10 @@ import "./styles.css";
 import {
   createRound,
   getCurrentIndex,
-  getRevealedHint,
+  isCurrentRelationRevealed,
   isRoundState,
   MAX_GUESSES,
+  RELATION_REVEAL_MISSES,
   restoreRound,
   routeIsValid,
   submitGuess,
@@ -81,12 +82,6 @@ function getVisibleNodeLabel(puzzle: Puzzle, round: RoundState, index: number): 
   if (index === 0 || index === puzzle.nodes.length - 1 || round.foundIndices.includes(index) || round.status === "lost") {
     return node.label;
   }
-  const currentIndex = getCurrentIndex(puzzle, round);
-  if (index === currentIndex && round.revealedLetters > 0) {
-    const prefix = getRevealedHint(puzzle, round);
-    const remaining = Math.max(0, Array.from(node.label).length - round.revealedLetters);
-    return prefix + (remaining ? ` ${Array.from({ length: remaining }, () => "·").join(" ")}` : "");
-  }
   return "????";
 }
 
@@ -114,11 +109,12 @@ function renderRoute(puzzle: Puzzle, round: RoundState): string {
       <span class="sequence-marker" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
       <div class="sequence-node"><span class="sequence-state">${stateLabel}</span><strong>${escapeHtml(label)}</strong></div>
       ${index < puzzle.nodes.length - 1 ? (() => {
-        const nextIndex = index + 1;
-        const unlocked = round.status !== "playing" || (currentIndex !== null && index < currentIndex)
-          || (currentIndex !== null && index === currentIndex - 1);
-        const isActiveLink = currentIndex === nextIndex && round.status === "playing";
-        return `<div class="sequence-link ${unlocked ? "is-unlocked" : ""} ${isActiveLink ? "is-active" : ""}" aria-hidden="true"><i></i><span>${unlocked ? escapeHtml(puzzle.edges[index].label) : ""}</span></div>`;
+        const isPastLink = currentIndex !== null && index < currentIndex - 1;
+        const isCurrentLink = currentIndex !== null && index === currentIndex - 1;
+        const relationVisible = round.status !== "playing" || isPastLink
+          || (isCurrentLink && isCurrentRelationRevealed(round));
+        const isActiveLink = isCurrentLink && round.status === "playing";
+        return `<div class="sequence-link ${relationVisible ? "is-unlocked" : ""} ${isActiveLink ? "is-active" : ""}" aria-hidden="true"><i></i><span>${relationVisible ? escapeHtml(puzzle.edges[index].label) : ""}</span></div>`;
       })() : ""}
     </li>`;
     return nodeMarkup;
@@ -143,16 +139,16 @@ function renderClue(puzzle: Puzzle, round: RoundState): string {
   const currentIndex = getCurrentIndex(puzzle, round)!;
   const previous = puzzle.nodes[currentIndex - 1];
   const relation = puzzle.edges[currentIndex - 1].label;
-  const hint = getRevealedHint(puzzle, round);
-  const target = puzzle.nodes[currentIndex];
-  const remaining = Math.max(0, Array.from(target.label).length - round.revealedLetters);
-  const displayHint = round.revealedLetters
-    ? `${hint}${remaining ? ` ${Array.from({ length: remaining }, () => "·").join(" ")}` : ""}`
-    : "????";
+  const relationRevealed = isCurrentRelationRevealed(round);
+  const dots = Array.from({ length: RELATION_REVEAL_MISSES }, (_, index) =>
+    `<span class="clue-pip ${index < round.wrongGuessesForCurrent ? "is-used" : ""}" aria-hidden="true"></span>`).join("");
+  const pipLabel = relationRevealed
+    ? "Relação revelada"
+    : `${RELATION_REVEAL_MISSES - round.wrongGuessesForCurrent} ${RELATION_REVEAL_MISSES - round.wrongGuessesForCurrent === 1 ? "erro" : "erros"} até a pista`;
   return `<section class="clue-panel" aria-live="polite" aria-label="Pista da posição ${currentIndex + 1}">
     <div class="clue-heading"><span class="clue-label">PRÓXIMO ELO · POSIÇÃO ${String(currentIndex + 1).padStart(2, "0")}</span><strong>${escapeHtml(previous.label)}</strong></div>
-    <div class="clue-equation"><span class="clue-relation">${escapeHtml(relation)}</span><span aria-hidden="true">↓</span><strong>${escapeHtml(displayHint)}</strong></div>
-    <p class="clue-help">${round.revealedLetters ? "A letra revelada ajuda a encontrar o próximo elo." : "Descubra a palavra que completa esta relação."}</p>
+    <div class="clue-equation"><span class="clue-relation">${relationRevealed ? escapeHtml(relation) : "Relação oculta"}</span><span aria-hidden="true">↓</span><strong>????</strong></div>
+    <div class="clue-progress"><p class="clue-help">${relationRevealed ? "A relação fica visível até você encontrar este elo." : "Erros válidos acendem as bolinhas; a relação aparece no terceiro."}</p><div class="clue-pips" role="img" aria-label="${round.wrongGuessesForCurrent} de ${RELATION_REVEAL_MISSES} erros válidos; ${pipLabel.toLocaleLowerCase("pt-BR")}">${dots}<span>${pipLabel}</span></div></div>
   </section>`;
 }
 
@@ -178,8 +174,8 @@ function render(): void {
     <header class="topbar"><a class="wordmark" href="/" aria-label="ECO início">ECO<span>.</span></a><div class="topbar-meta">${renderChallengePicker()}</div></header>
     <div class="game-layout">
       <section class="game-panel" aria-label="Partida">
-        <section class="intro-row"><div><span class="eyebrow">DOIS PROTÓTIPOS · SEQUÊNCIAS FIXAS</span><h1>Encontre cada elo.<br><em>Complete o caminho.</em></h1></div>
-          <details class="how-to"><summary>Como jogar <span aria-hidden="true">＋</span></summary><div class="how-to-copy"><p>O mapa tem dez posições: início e chegada ficam visíveis. Descubra os oito elos entre elas, seguindo a relação que aparece para a lacuna atual.</p><p>Qualquer palavra aceita pelo dicionário vale como tentativa. Um erro revela uma letra; se acertar uma palavra futura, ela fica marcada e você continua pela primeira lacuna. Há ${MAX_GUESSES} palpites por percurso.</p></div></details>
+        <section class="intro-row"><div><span class="eyebrow">TRÊS PROTÓTIPOS · SEQUÊNCIAS FIXAS</span><h1>Encontre cada elo.<br><em>Complete o caminho.</em></h1></div>
+          <details class="how-to"><summary>Como jogar <span aria-hidden="true">＋</span></summary><div class="how-to-copy"><p>O mapa tem dez posições: início e chegada ficam visíveis. Descubra os oito elos entre elas sem ver a relação logo de cara.</p><p>Um palpite válido fora da rota acende uma bolinha; a relação aparece após três erros. Acertar uma palavra futura marca sua posição, mas você continua pela primeira lacuna. Há ${MAX_GUESSES} palpites por percurso.</p></div></details>
         </section>
         <section class="target-strip" aria-label="Início, destino e palpites">
           <div class="endpoint"><span>INÍCIO</span><strong>${escapeHtml(start.label)}</strong></div><span class="endpoint-arrow" aria-hidden="true">→</span>
@@ -247,7 +243,9 @@ function bindGuessForm(): void {
       state = result.state;
       persistState();
       notice = result.outcome === "wrong"
-        ? "Ainda não é essa palavra. Uma letra do elo atual foi revelada."
+        ? isCurrentRelationRevealed(state)
+          ? "Terceiro erro: a relação foi revelada."
+          : `Ainda não é essa palavra. ${state.wrongGuessesForCurrent} de ${RELATION_REVEAL_MISSES} erros antes da pista.`
         : result.outcome === "correct"
           ? result.foundIndex !== undefined && getCurrentIndex(activePuzzle, state) !== null
             && result.foundIndex > getCurrentIndex(activePuzzle, state)!
@@ -341,7 +339,7 @@ function scrollMapToLatest(behavior: ScrollBehavior): void {
 }
 
 function validatePuzzleData(): void {
-  if (puzzles.length !== 2) throw new Error("O ECO deve oferecer exatamente dois protótipos.");
+  if (puzzles.length !== 3) throw new Error("O ECO deve oferecer exatamente três protótipos.");
   for (const puzzle of puzzles) {
     if (!routeIsValid(puzzle)) throw new Error(`Rota inválida: ${puzzle.id}`);
     const intermediates = puzzle.nodes.slice(1, -1);

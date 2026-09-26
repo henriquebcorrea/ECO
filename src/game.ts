@@ -22,7 +22,8 @@ export interface Puzzle {
 
 export type RoundStatus = "playing" | "solved" | "lost";
 export const MAX_GUESSES = 24;
-const STATE_VERSION = 5 as const;
+export const RELATION_REVEAL_MISSES = 3;
+const STATE_VERSION = 6 as const;
 
 export interface RoundState {
   version: typeof STATE_VERSION;
@@ -32,8 +33,8 @@ export interface RoundState {
   /** Canonicalized words make aliases count as duplicates. */
   attemptedWords: string[];
   attemptCount: number;
-  /** Number of leading letters shown for the current missing position. */
-  revealedLetters: number;
+  /** Valid wrong guesses on the active gap; the authored relation appears at three. */
+  wrongGuessesForCurrent: number;
   status: RoundStatus;
 }
 
@@ -66,7 +67,7 @@ export function createRound(puzzleId: string): RoundState {
     foundIndices: [],
     attemptedWords: [],
     attemptCount: 0,
-    revealedLetters: 0,
+    wrongGuessesForCurrent: 0,
     status: "playing",
   };
 }
@@ -78,10 +79,8 @@ export function getCurrentIndex(puzzle: Puzzle, state: RoundState): number | nul
   return null;
 }
 
-export function getRevealedHint(puzzle: Puzzle, state: RoundState): string {
-  const index = getCurrentIndex(puzzle, state);
-  if (index === null || state.revealedLetters <= 0) return "";
-  return Array.from(puzzle.nodes[index].label).slice(0, state.revealedLetters).join("");
+export function isCurrentRelationRevealed(state: RoundState): boolean {
+  return state.wrongGuessesForCurrent >= RELATION_REVEAL_MISSES;
 }
 
 function canonicalGuessKey(raw: string, knownNode?: WordNode): string {
@@ -127,7 +126,9 @@ export function submitGuess(
       attemptedWords,
       attemptCount,
       foundIndices,
-      revealedLetters: currentIndex !== null && routeIndex === currentIndex ? 0 : state.revealedLetters,
+      wrongGuessesForCurrent: currentIndex !== null && routeIndex === currentIndex
+        ? 0
+        : state.wrongGuessesForCurrent,
       status: solved ? "solved" : lost ? "lost" : "playing",
     };
     return {
@@ -143,9 +144,9 @@ export function submitGuess(
     ...state,
     attemptedWords,
     attemptCount,
-    revealedLetters: Math.min(
-      Array.from(puzzle.nodes[getCurrentIndex(puzzle, state) ?? 1].label).length,
-      state.revealedLetters + 1,
+    wrongGuessesForCurrent: Math.min(
+      RELATION_REVEAL_MISSES,
+      state.wrongGuessesForCurrent + 1,
     ),
     status: lost ? "lost" : "playing",
   };
@@ -161,28 +162,60 @@ export function isRoundState(value: unknown, puzzle: Puzzle): value is RoundStat
   if (new Set(candidate.foundIndices).size !== candidate.foundIndices.length) return false;
   if (!Array.isArray(candidate.attemptedWords) || !candidate.attemptedWords.every((word) => typeof word === "string")) return false;
   if (!Number.isInteger(candidate.attemptCount) || candidate.attemptCount! < 0 || candidate.attemptCount! > MAX_GUESSES) return false;
-  if (!Number.isInteger(candidate.revealedLetters) || candidate.revealedLetters! < 0) return false;
+  if (!Number.isInteger(candidate.wrongGuessesForCurrent)
+    || candidate.wrongGuessesForCurrent! < 0
+    || candidate.wrongGuessesForCurrent! > RELATION_REVEAL_MISSES) return false;
   if (candidate.status !== "playing" && candidate.status !== "solved" && candidate.status !== "lost") return false;
   return true;
 }
 
 export function restoreRound(value: unknown, puzzle: Puzzle): RoundState | null {
-  if (!isRoundState(value, puzzle)) return null;
-  const foundIndices = [...value.foundIndices].sort((left, right) => left - right);
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as {
+    version?: number;
+    puzzleId?: unknown;
+    foundIndices?: unknown;
+    attemptedWords?: unknown;
+    attemptCount?: unknown;
+    revealedLetters?: unknown;
+    status?: unknown;
+  };
+  let state: RoundState;
+  if (candidate.version === 5) {
+    if (candidate.puzzleId !== puzzle.id
+      || !Array.isArray(candidate.foundIndices)
+      || !candidate.foundIndices.every((index) => Number.isInteger(index) && index! > 0 && index! < puzzle.nodes.length - 1)
+      || new Set(candidate.foundIndices).size !== candidate.foundIndices.length
+      || !Array.isArray(candidate.attemptedWords)
+      || !candidate.attemptedWords.every((word) => typeof word === "string")
+      || typeof candidate.attemptCount !== "number"
+      || !Number.isInteger(candidate.attemptCount)
+      || candidate.attemptCount! < 0
+      || candidate.attemptCount! > MAX_GUESSES
+      || typeof candidate.revealedLetters !== "number"
+      || !Number.isInteger(candidate.revealedLetters)
+      || candidate.revealedLetters! < 0
+      || (candidate.status !== "playing" && candidate.status !== "solved" && candidate.status !== "lost")) return null;
+    state = {
+      version: STATE_VERSION,
+      puzzleId: puzzle.id,
+      foundIndices: candidate.foundIndices as number[],
+      attemptedWords: candidate.attemptedWords as string[],
+      attemptCount: candidate.attemptCount as number,
+      wrongGuessesForCurrent: 0,
+      status: candidate.status as RoundStatus,
+    };
+  } else {
+    if (!isRoundState(value, puzzle)) return null;
+    state = value;
+  }
+  const foundIndices = [...state.foundIndices].sort((left, right) => left - right);
   const allFound = foundIndices.length === puzzle.nodes.length - 2;
-  const status = allFound ? "solved" : value.attemptCount >= MAX_GUESSES ? "lost" : "playing";
-  const currentIndex = (() => {
-    for (let index = 1; index < puzzle.nodes.length - 1; index += 1) {
-      if (!foundIndices.includes(index)) return index;
-    }
-    return null;
-  })();
-  const revealLimit = currentIndex === null ? 0 : Array.from(puzzle.nodes[currentIndex].label).length;
+  const status = allFound ? "solved" : state.attemptCount >= MAX_GUESSES ? "lost" : "playing";
   return {
-    ...value,
+    ...state,
     foundIndices,
-    attemptedWords: [...new Set(value.attemptedWords)],
-    revealedLetters: Math.min(value.revealedLetters, revealLimit),
+    attemptedWords: [...new Set(state.attemptedWords)],
     status,
   };
 }

@@ -25,6 +25,15 @@ describe("dicionário pt-BR offline", () => {
     expect(spell.testSpelling("casa grande")).toBe(false);
   });
 
+  it("usa apenas palavras aceitas pelo dicionário nas três rotas", () => {
+    expect(puzzles).toHaveLength(3);
+    for (const puzzle of puzzles) {
+      for (const node of puzzle.nodes) {
+        expect(spell.testSpelling(node.label), `${puzzle.id}: ${node.label}`).toBe(true);
+      }
+    }
+  });
+
   it("aplica a regra de uma palavra, nomes próprios e compostos listados", () => {
     const metadata: VocabularyMetadata = {
       properNames: ["henrique"],

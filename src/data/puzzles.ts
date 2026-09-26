@@ -40,6 +40,14 @@ export const puzzles: Puzzle[] = [
     "marca o", "fica na", "é preservada em", "pode exibir", "pode ser um",
     "tem uma", "pode ser feita de", "vem da", "cresce na",
   ]),
+  makePuzzle("prototipo-3", "Escova → Campo", "Uma sequência surpresa para testar as novas pistas.", [
+    ["escova", "Escova"], ["dente", "Dente"], ["sorriso", "Sorriso"], ["fotografia", "Fotografia"],
+    ["camera", "Câmera"], ["filme", "Filme"], ["cinema", "Cinema"], ["pipoca", "Pipoca"],
+    ["milho", "Milho"], ["campo", "Campo"],
+  ], [
+    "limpa o", "faz parte de um", "pode aparecer em uma", "é feita com uma",
+    "grava um", "é exibido no", "costuma vender", "é feita de", "é cultivado no",
+  ]),
 ];
 
 if (import.meta.env.DEV && puzzles.some((puzzle) => !routeIsValid(puzzle))) {

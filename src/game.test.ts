@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   createRound,
   getCurrentIndex,
-  getRevealedHint,
+  isCurrentRelationRevealed,
   MAX_GUESSES,
   normalizeWord,
+  RELATION_REVEAL_MISSES,
   restoreRound,
   routeIsValid,
   submitGuess,
@@ -29,8 +30,8 @@ function guess(puzzleIndex: number, state: ReturnType<typeof createRound>, word:
 }
 
 describe("protótipos de sequência", () => {
-  it("oferece exatamente duas rotas de dez palavras e nove relações", () => {
-    expect(puzzles).toHaveLength(2);
+  it("oferece exatamente três rotas de dez palavras e nove relações", () => {
+    expect(puzzles).toHaveLength(3);
     for (const puzzle of puzzles) {
       expect(puzzle.nodes).toHaveLength(10);
       expect(puzzle.edges).toHaveLength(9);
@@ -69,19 +70,58 @@ describe("protótipos de sequência", () => {
     expect(state.foundIndices).toEqual([1, 2, 3]);
   });
 
-  it("erros aceitos revelam letras da lacuna atual; uma posição futura não apaga a dica", () => {
+  it("esconde a relação nos dois primeiros erros e a revela no terceiro", () => {
     const puzzle = puzzles[0];
     let state = createRound(puzzle.id);
-    const wrong = submitGuess(puzzle, state, "Água", alwaysValid);
-    expect(wrong.kind).toBe("accepted");
-    if (wrong.kind !== "accepted") return;
-    state = wrong.state;
-    expect(wrong.outcome).toBe("wrong");
-    expect(getRevealedHint(puzzle, state)).toBe("M");
+    expect(state.wrongGuessesForCurrent).toBe(0);
+    expect(isCurrentRelationRevealed(state)).toBe(false);
 
+    state = guess(0, state, "Água").state;
+    expect(state.wrongGuessesForCurrent).toBe(1);
+    expect(isCurrentRelationRevealed(state)).toBe(false);
+    state = guess(0, state, "Casa").state;
+    expect(state.wrongGuessesForCurrent).toBe(2);
+    expect(isCurrentRelationRevealed(state)).toBe(false);
+    state = guess(0, state, "Janela").state;
+    expect(state.wrongGuessesForCurrent).toBe(RELATION_REVEAL_MISSES);
+    expect(isCurrentRelationRevealed(state)).toBe(true);
+
+    state = guess(0, state, "Computador").state;
+    expect(state.wrongGuessesForCurrent).toBe(RELATION_REVEAL_MISSES);
+    expect(state.attemptCount).toBe(4);
+  });
+
+  it("não gasta bolinhas com acerto futuro e reinicia ao preencher a lacuna atual", () => {
+    const puzzle = puzzles[0];
+    let state = guess(0, createRound(puzzle.id), "Água").state;
+    state = guess(0, state, "Casa").state;
     state = guess(0, state, "Bolo").state;
+    expect(state.wrongGuessesForCurrent).toBe(2);
     expect(getCurrentIndex(puzzle, state)).toBe(1);
-    expect(getRevealedHint(puzzle, state)).toBe("M");
+
+    state = guess(0, state, "Massa").state;
+    expect(getCurrentIndex(puzzle, state)).toBe(2);
+    expect(state.wrongGuessesForCurrent).toBe(0);
+    expect(isCurrentRelationRevealed(state)).toBe(false);
+  });
+
+  it("migra rodadas anteriores sem perder acertos ou palpites", () => {
+    const puzzle = puzzles[0];
+    const legacy = {
+      version: 5,
+      puzzleId: puzzle.id,
+      foundIndices: [3],
+      attemptedWords: ["route:bolo", "word:agua"],
+      attemptCount: 2,
+      revealedLetters: 2,
+      status: "playing",
+    };
+    const restored = restoreRound(legacy, puzzle);
+    expect(restored?.version).toBe(6);
+    expect(restored?.foundIndices).toEqual([3]);
+    expect(restored?.attemptedWords).toEqual(["route:bolo", "word:agua"]);
+    expect(restored?.attemptCount).toBe(2);
+    expect(restored?.wrongGuessesForCurrent).toBe(0);
   });
 
   it("normaliza acentos e caixa, bloqueia duplicatas, entradas inválidas e os extremos sem gastar palpites", () => {
@@ -93,10 +133,13 @@ describe("protótipos de sequência", () => {
     expect(submitGuess(puzzle, state, "PÃO", alwaysValid).kind).toBe("endpoint");
     expect(submitGuess(puzzle, state, "lua", alwaysValid).kind).toBe("endpoint");
     expect(state.attemptCount).toBe(0);
+    expect(state.wrongGuessesForCurrent).toBe(0);
 
-    state = guess(0, state, "FUMAÇA").state;
-    expect(submitGuess(puzzle, state, "fumaca", alwaysValid).kind).toBe("duplicate");
+    state = guess(0, state, "Casa").state;
+    expect(submitGuess(puzzle, state, "casa", alwaysValid).kind).toBe("duplicate");
+    expect(submitGuess(puzzle, state, "palavra composta", alwaysValid).kind).toBe("invalid");
     expect(state.attemptCount).toBe(1);
+    expect(state.wrongGuessesForCurrent).toBe(1);
   });
 
   it("encerra em derrota exatamente no palpite 24 e revela o restante ao restaurar", () => {
